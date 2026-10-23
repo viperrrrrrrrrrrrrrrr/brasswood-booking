@@ -1,0 +1,8 @@
+Hero photo (public/hero-1600.webp, public/hero-800.webp)
+  Title:        "empty brown leather barber chairs"
+  Photographer: Jarrod Reed (https://unsplash.com/@jarrodreed)
+  Source:       https://unsplash.com/photos/empty-brown-leather-barber-chairs-_I4sDxMK2ls
+  License:      Unsplash License (https://unsplash.com/license) — free for commercial and
+                non-commercial use, no permission or attribution required.
+  Changes:      mirrored horizontally, cropped (16:9 and 4:3), slightly desaturated, converted to WebP.
+  Note:         a stock photo, not a photo of the fictional "Brasswood Barber Co." shop.

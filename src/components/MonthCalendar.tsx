@@ -41,14 +41,14 @@ export function MonthCalendar({ month, onMonthChange, value, onChange, isEnabled
   return (
     <div className="select-none">
       <div className="mb-3 flex items-center justify-between">
-        <p className="font-semibold text-stone-900">{label}</p>
+        <p className="font-display text-lg font-semibold text-cream">{label}</p>
         <div className="flex gap-1">
           <button
             type="button"
             aria-label="Previous month"
             disabled={!!minMonth && month <= minMonth}
             onClick={() => onMonthChange(shiftMonth(month, -1))}
-            className="rounded-lg p-1.5 text-stone-600 hover:bg-stone-100 disabled:opacity-30"
+            className="rounded-md p-1.5 text-muted transition-colors hover:bg-white/[.05] hover:text-cream disabled:opacity-25"
           >
             <ChevronLeft className="size-5" />
           </button>
@@ -57,13 +57,13 @@ export function MonthCalendar({ month, onMonthChange, value, onChange, isEnabled
             aria-label="Next month"
             disabled={!!maxMonth && month >= maxMonth}
             onClick={() => onMonthChange(shiftMonth(month, 1))}
-            className="rounded-lg p-1.5 text-stone-600 hover:bg-stone-100 disabled:opacity-30"
+            className="rounded-md p-1.5 text-muted transition-colors hover:bg-white/[.05] hover:text-cream disabled:opacity-25"
           >
             <ChevronRight className="size-5" />
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-stone-400">
+      <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold tracking-wider text-faint uppercase">
         {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((d) => (
           <div key={d} className="py-1">{d}</div>
         ))}
@@ -83,16 +83,16 @@ export function MonthCalendar({ month, onMonthChange, value, onChange, isEnabled
               aria-pressed={selected}
               aria-label={parseDate(d).toDateString()}
               className={cn(
-                'relative aspect-square rounded-xl text-sm font-medium transition sm:aspect-auto sm:h-11',
+                'relative aspect-square rounded-md text-sm font-medium tabular-nums transition-colors sm:aspect-auto sm:h-10',
                 selected
-                  ? 'bg-ink text-white shadow'
+                  ? 'bg-brand-400 font-semibold text-ink'
                   : enabled
-                    ? 'bg-brand-50 text-stone-900 hover:bg-brand-100'
-                    : 'text-stone-300',
+                    ? 'bg-graphite-2 text-cream ring-1 ring-inset ring-brand-600/70 hover:bg-walnut hover:ring-brand-400'
+                    : 'text-faint/50',
               )}
             >
               {Number(d.slice(8))}
-              {d === today && <span className={cn('absolute bottom-1 left-1/2 size-1 -translate-x-1/2 rounded-full', selected ? 'bg-white' : 'bg-brand-500')} />}
+              {d === today && <span className={cn('absolute bottom-1 left-1/2 size-1 -translate-x-1/2 rounded-full', selected ? 'bg-ink' : 'bg-brand-300')} />}
             </button>
           )
         })}

@@ -2,28 +2,47 @@
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-display: "Fraunces", ui-serif, Georgia, serif;
-  --color-brand-50: #fbf6ee;
-  --color-brand-100: #f4e7d1;
-  --color-brand-200: #e8cda1;
-  --color-brand-300: #dcb06f;
-  --color-brand-400: #d19a4c;
-  --color-brand-500: #b98232;
-  --color-brand-600: #9c6827;
-  --color-brand-700: #7d5022;
-  --color-brand-800: #643f20;
-  --color-brand-900: #52351d;
-  --color-ink: #1c1917;
+  --font-display: "Playfair Display", ui-serif, Georgia, "Times New Roman", serif;
+  /* Matte brass / muted gold (shared with the admin at token level). */
+  --color-brand-50: #f7f2e8;
+  --color-brand-100: #ede2cc;
+  --color-brand-200: #ddc9a2;
+  --color-brand-300: #cbb07c;
+  --color-brand-400: #b99862;
+  --color-brand-500: #a3824e;
+  --color-brand-600: #87693d;
+  --color-brand-700: #6c5331;
+  --color-brand-800: #54412a;
+  --color-brand-900: #433424;
+  /* Dark palette: black, graphite, warm walnut. */
+  --color-ink: #0f0d0b;
+  --color-coal: #151310;
+  --color-graphite: #1c1a17;
+  --color-graphite-2: #252220;
+  --color-walnut: #2a2019;
+  --color-line: #39322b;
+  --color-cream: #efe8dc;
+  --color-muted: #a89f92;
+  --color-faint: #756d62;
 }
 
 html { -webkit-tap-highlight-color: transparent; }
 body { @apply bg-stone-50 text-stone-900 antialiased; font-feature-settings: "cv11", "ss01"; }
+/* Client pages are dark: keep overscroll / safe-area edges dark too. */
+html:has(.public-shell), body:has(.public-shell) { background: var(--color-ink); color-scheme: dark; }
 
 .scrollbar-thin { scrollbar-width: thin; }
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 
-@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.animate-fade-up { animation: fade-up .25s ease-out both; }
-@keyframes pop { 0% { transform: scale(.6); opacity: 0 } 70% { transform: scale(1.08) } 100% { transform: scale(1); opacity: 1 } }
-.animate-pop { animation: pop .4s cubic-bezier(.2,.8,.2,1) both; }
+/* Small uppercase label used across the client site. */
+.eyebrow { font-size: .6875rem; font-weight: 600; letter-spacing: .22em; text-transform: uppercase; }
+
+@keyframes fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.animate-fade-up { animation: fade-up .18s ease-out both; }
+@keyframes pop { 0% { transform: scale(.85); opacity: 0 } 100% { transform: scale(1); opacity: 1 } }
+.animate-pop { animation: pop .25s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up, .animate-pop { animation: none; }
+  html { scroll-behavior: auto; }
+}
