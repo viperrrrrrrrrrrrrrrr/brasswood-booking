@@ -1,16 +1,18 @@
 // Browser history (Back / Forward / reload) checks for the booking flow and admin, desktop + mobile.
-// Usage: npm run build && npm run preview  (in another shell), then
-//        BASE_URL=http://localhost:4173 CHROME_PATH=/usr/bin/google-chrome npm run e2e:history
+// Static demo: npm run build:demo && npm run preview:demo (another shell), then  npm run e2e:history
+// API + D1:    npm run dev:api (another shell), then                              npm run e2e:history -- --mode=api
 import { chromium } from 'playwright-core'
+import { fileURLToPath } from 'node:url'
+import { BASE, CHROME, MODE, SHOT_PREFIX, allBookings, isExpectedConsoleError, uiLogin } from './e2e-lib.mjs'
 
-const BASE = process.env.BASE_URL ?? 'http://localhost:4173'
+console.log(`mode=${MODE} base=${BASE}`)
 const results = []
 let prefix = ''
 const ok = (name, cond, extra = '') => {
   results.push({ name: prefix + name, pass: !!cond })
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${prefix}${name}${extra ? '  — ' + extra : ''}`)
 }
-const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? '/usr/bin/google-chrome', args: ['--no-sandbox'] })
+const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] })
 
 const VIEWPORTS = [
   { label: 'desktop', opts: { viewport: { width: 1440, height: 900 } } },
@@ -26,14 +28,14 @@ for (const vp of VIEWPORTS) {
   const page = await ctx.newPage()
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  page.on('console', (m) => m.type() === 'error' && !isExpectedConsoleError(m.text()) && errors.push(m.text()))
 
   const step = () => new URL(page.url()).searchParams.get('step') ?? 'service'
   const waitStep = async (s) => {
     await page.waitForFunction((s) => (new URL(location.href).searchParams.get('step') ?? 'service') === s, s, { timeout: 5000 }).catch(() => {})
     await page.waitForTimeout(250)
   }
-  const bookingsCount = () => page.evaluate(() => JSON.parse(localStorage.getItem('brasswood-booking-demo') ?? '{"bookings":[]}').bookings.length)
+  const bookingsCount = async () => (await allBookings(page)).length
   const cls = (sel) => page.getAttribute(sel, 'class')
   const summaryText = () => page.locator(vp.mobile ? 'div.fixed.inset-x-0.bottom-0' : 'aside').first().innerText()
   const confirmSel = vp.mobile ? '[data-testid="confirm-mobile"]' : '[data-testid="confirm-desktop"]'
@@ -128,7 +130,7 @@ for (const vp of VIEWPORTS) {
     const pts = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 2, r.top + 2], [r.right - 2, r.bottom - 2]]
     return { inView: r.top >= 0 && r.bottom <= innerHeight, uncovered: pts.every(([x, y]) => a.contains(document.elementFromPoint(x, y))) }
   })
-  if (vp.mobile) await page.screenshot({ path: new URL('../shots/booking-mobile-footer.png', import.meta.url).pathname })
+  if (vp.mobile) await page.screenshot({ path: fileURLToPath(new URL(`../shots/${SHOT_PREFIX}booking-mobile-footer.png`, import.meta.url)) })
   ok('Footer admin link visible and not covered at page bottom (elementFromPoint)', linkHit.inView && linkHit.uncovered, JSON.stringify(linkHit))
   await adminLink.click({ timeout: 5000 })
   await page.waitForURL('**/admin/login')
@@ -223,7 +225,7 @@ for (const vp of VIEWPORTS) {
   await page.waitForSelector('[data-testid="service-svc_fade"]')
   await page.goto(BASE + '/admin') // → /admin/login (replace)
   await page.waitForURL('**/admin/login')
-  await page.click('text=Fill in'); await page.click('button[type="submit"]')
+  await uiLogin(page)
   await page.waitForSelector('text=Revenue · last 7 days')
   ok('Login redirects to /admin', new URL(page.url()).pathname === '/admin')
   await page.goBack(); await page.waitForTimeout(600)

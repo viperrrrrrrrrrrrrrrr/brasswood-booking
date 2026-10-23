@@ -1,6 +1,5 @@
 import type { Booking, Client, ID, NewBookingInput, RescheduleInput, BookingStatus } from '../lib/types'
-import { addDays } from '../lib/date'
-import { getSlots, isStaffFree, pickStaff, type AvailabilityContext } from '../lib/availability'
+import { getSlots, isStaffFree, nextAvailable, openDates, pickStaff, type AvailabilityContext } from '../lib/availability'
 import { BookingConflictError, NotFoundError, type BookingFilter, type CrudRepository, type DataSource } from './repository'
 import { createSeed, DB_VERSION, makeCode, makeId, type DbState } from './seed'
 
@@ -69,6 +68,8 @@ export class LocalStorageDataSource implements DataSource {
     }
   }
 
+  readonly canResetDemoData = true
+
   async resetDemoData() {
     await sleep(this.latencyMs)
     this.state = createSeed()
@@ -134,13 +135,8 @@ export class LocalStorageDataSource implements DataSource {
 
   availability = {
     getSlots: async (q: Parameters<typeof getSlots>[1]) => getSlots(this.ctx(), q),
-    getOpenDates: async (serviceId: ID, staffId: ID | 'any', from: string, to: string) => {
-      const out: string[] = []
-      for (let d = from; d <= to; d = addDays(d, 1)) {
-        if (getSlots(this.ctx(), { serviceId, staffId, date: d }).length) out.push(d)
-      }
-      return out
-    },
+    getOpenDates: async (serviceId: ID, staffId: ID | 'any', from: string, to: string) => openDates(this.ctx(), serviceId, staffId, from, to),
+    getNextAvailable: async (serviceId: ID, staffIds: (ID | 'any')[]) => nextAvailable(this.ctx(), serviceId, staffIds),
   }
 
   private findBooking(id: ID): Booking {

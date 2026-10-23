@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Cloudflare / local backend
+.wrangler
+.dev.vars
+dist-demo

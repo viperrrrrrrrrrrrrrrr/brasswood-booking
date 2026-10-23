@@ -2,12 +2,12 @@ import type {
   Booking, BookingStatus, BusinessSettings, Client, DateStr, ID, NewBookingInput, RescheduleInput,
   Service, Slot, StaffMember, TimeOff,
 } from '../lib/types'
-import type { AvailabilityQuery } from '../lib/availability'
+import type { AvailabilityQuery, NextAvailable } from '../lib/availability'
 
 /**
  * The single seam between UI and persistence.
- * Every method is async so the localStorage implementation can be swapped for an
- * HTTP client (REST/tRPC/Supabase…) without touching components.
+ * Every method is async; implemented by LocalStorageDataSource (static demo) and
+ * HttpDataSource (Cloudflare Pages Functions + D1). Selected by VITE_DATA_SOURCE in src/data/index.ts.
  */
 export interface CrudRepository<T extends { id: ID }> {
   list(): Promise<T[]>
@@ -47,6 +47,8 @@ export interface AvailabilityService {
   getSlots(q: AvailabilityQuery): Promise<Slot[]>
   /** Dates in [from,to] that have at least one free slot. */
   getOpenDates(serviceId: ID, staffId: ID | 'any', from: DateStr, to: DateStr): Promise<DateStr[]>
+  /** First free slot for each specialist id (or 'any'). Computed by the data source — never needs other clients' bookings. */
+  getNextAvailable(serviceId: ID, staffIds: (ID | 'any')[]): Promise<NextAvailable>
 }
 
 export interface DataSource {
@@ -59,6 +61,8 @@ export interface DataSource {
   settings: { get(): Promise<BusinessSettings>; update(patch: Partial<BusinessSettings>): Promise<BusinessSettings> }
   /** Notifies on any data change (including from other tabs). Returns unsubscribe. */
   subscribe(listener: () => void): () => void
+  /** Only the browser demo can reset its data; false for the server API. */
+  readonly canResetDemoData: boolean
   resetDemoData(): Promise<void>
 }
 
@@ -73,5 +77,13 @@ export class NotFoundError extends Error {
   constructor(message = 'Not found') {
     super(message)
     this.name = 'NotFoundError'
+  }
+}
+
+/** The server rejected the request because the admin session is missing or expired. */
+export class UnauthorizedError extends Error {
+  constructor(message = 'Please sign in again.') {
+    super(message)
+    this.name = 'UnauthorizedError'
   }
 }

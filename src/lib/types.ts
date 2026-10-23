@@ -80,6 +80,8 @@ export interface BusinessSettings {
   slotStepMin: number
   minNoticeMin: number
   horizonDays: number
+  /** IANA timezone of the shop (server mode). Slots are computed in this zone. */
+  timezone?: string
 }
 
 export interface Slot {

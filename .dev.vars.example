@@ -1,0 +1,7 @@
+# Copy to .dev.vars (never commit .dev.vars). Used only by `wrangler pages dev` locally.
+# In production set these as encrypted secrets in Cloudflare Pages instead (see README).
+ADMIN_USERNAME=admin
+# At least 10 characters. Choose your own — this is only an example.
+ADMIN_PASSWORD=change-me-to-a-long-password
+# Alternative to ADMIN_PASSWORD: a PBKDF2 hash from `npm run hash-password -- "your password"`
+# ADMIN_PASSWORD_HASH=pbkdf2-sha256$100000$...$...

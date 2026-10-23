@@ -42,10 +42,12 @@ export default function AdminLayout() {
       </nav>
       <div className="space-y-0.5 border-t border-white/10 px-3 py-3">
         <a href="/" target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-stone-400 hover:bg-white/5 hover:text-stone-200"><ExternalLink className="size-[18px]" />Open booking page</a>
-        <button onClick={reset} disabled={resetting} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-stone-400 hover:bg-white/5 hover:text-stone-200" data-testid="reset-demo">
-          <RotateCcw className={cn('size-[18px]', resetting && 'animate-spin')} />Reset demo data
-        </button>
-        <button onClick={() => { auth.logout(); nav('/admin/login', { replace: true }) }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-stone-400 hover:bg-white/5 hover:text-stone-200"><LogOut className="size-[18px]" />Sign out</button>
+        {api.canResetDemoData && (
+          <button onClick={reset} disabled={resetting} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-stone-400 hover:bg-white/5 hover:text-stone-200" data-testid="reset-demo">
+            <RotateCcw className={cn('size-[18px]', resetting && 'animate-spin')} />Reset demo data
+          </button>
+        )}
+        <button onClick={async () => { await auth.logout().catch(() => undefined); nav('/admin/login', { replace: true }) }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-stone-400 hover:bg-white/5 hover:text-stone-200"><LogOut className="size-[18px]" />Sign out</button>
       </div>
     </div>
   )

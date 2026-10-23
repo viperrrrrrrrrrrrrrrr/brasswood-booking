@@ -5,11 +5,21 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:demo": "vite --mode demo",
+    "dev:api": "npm run build && wrangler pages dev --port 8788",
     "build": "tsc -b && vite build",
+    "build:demo": "tsc -b && vite build --mode demo --outDir dist-demo",
     "lint": "oxlint",
     "preview": "vite preview",
+    "preview:demo": "vite preview --outDir dist-demo",
+    "db:migrate:local": "wrangler d1 migrations apply brasswood --local",
+    "db:seed:local": "wrangler d1 execute brasswood --local --file seed/seed.sql",
+    "db:seed:demo:local": "node scripts/gen-seed.mjs --demo && wrangler d1 execute brasswood --local --file .wrangler/seed-demo.sql",
+    "db:reset:local": "node scripts/reset-local-db.mjs && npm run db:migrate:local && npm run db:seed:local",
+    "hash-password": "node scripts/hash-password.mjs",
     "e2e": "node scripts/e2e.mjs",
-    "e2e:history": "node scripts/e2e-history.mjs"
+    "e2e:history": "node scripts/e2e-history.mjs",
+    "e2e:api": "node scripts/e2e-api.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.61.0",
@@ -18,6 +28,7 @@
     "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261023.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
@@ -27,6 +38,10 @@
     "playwright-core": "^1.64.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "wrangler": "^4.152.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

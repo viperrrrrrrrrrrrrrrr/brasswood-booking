@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Check, Clock, MapPin, Phone, Scissors, Users, CalendarDays, CalendarPlus, Sparkles, ChevronRight, Sun, Sunset, Moon } from 'lucide-react'
-import { api, BookingConflictError } from '../../data'
+import { api, BookingConflictError, IS_DEMO } from '../../data'
 import { useCatalog, useQuery } from '../../data/hooks'
 import type { Booking, DateStr, ID, Service, Slot, StaffMember } from '../../lib/types'
 import { addDays, fmtDate, fmtDateLong, fmtDuration, fmtTime, todayStr, usd, WEEKDAYS_SHORT } from '../../lib/date'
-import { getSlots } from '../../lib/availability'
 import { Avatar, Button, Card, Field, Input, Spinner, Textarea, cn, useToast } from '../../components/ui'
 import { MonthCalendar, monthKey, monthRange } from '../../components/MonthCalendar'
 import { PublicLayout } from '../../components/PublicLayout'
@@ -328,21 +327,8 @@ function ServiceStep({ services, value, onPick }: { services: Service[]; value: 
 }
 
 function useNextAvailable(service: Service, staffIds: (ID | 'any')[]) {
-  // Reads a snapshot of all data once; cheap enough for a handful of staff and 30 days.
-  return useQuery(async () => {
-    const [services, staff, bookings, timeOff, settings] = await Promise.all([api.services.list(), api.staff.list(), api.bookings.list({ from: todayStr() }), api.timeOff.list(), api.settings.get()])
-    const ctx = { services, staff, bookings, timeOff, settings }
-    const out: Record<string, { date: DateStr; start: number } | null> = {}
-    for (const id of staffIds) {
-      out[id] = null
-      for (let i = 0; i <= settings.horizonDays; i++) {
-        const d = addDays(todayStr(), i)
-        const slots = getSlots(ctx, { serviceId: service.id, staffId: id, date: d })
-        if (slots.length) { out[id] = { date: d, start: slots[0].start }; break }
-      }
-    }
-    return out
-  }, [service.id, staffIds.join()])
+  // Computed by the data source (server-side in API mode) — the public page never loads other clients' bookings.
+  return useQuery(() => api.availability.getNextAvailable(service.id, staffIds), [service.id, staffIds.join()])
 }
 
 function nextLabel(n?: { date: DateStr; start: number } | null) {
@@ -505,7 +491,7 @@ function DetailsStep({ details, errors, onChange }: { details: Details; errors: 
           <Textarea name="notes" value={details.notes} onChange={set('notes')} placeholder="e.g. keep length on top, sensitive skin…" />
         </Field>
       </form>
-      <p className="mt-4 text-xs text-stone-400">Demo only: details are stored in this browser’s local storage and never sent anywhere.</p>
+      {IS_DEMO && <p className="mt-4 text-xs text-stone-400">Demo only: details are stored in this browser’s local storage and never sent anywhere.</p>}
     </div>
   )
 }

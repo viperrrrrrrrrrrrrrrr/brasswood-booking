@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useReducer, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { ToastProvider, Spinner } from './components/ui'
 import BookingPage from './pages/booking/BookingPage'
@@ -16,6 +16,13 @@ const ClientsPage = lazy(() => import('./pages/admin/ClientsPage'))
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const loc = useLocation()
+  const [, rerender] = useReducer((x: number) => x + 1, 0)
+  useEffect(() => auth.onChange(rerender), [])
+  // Re-validate the server session on every admin navigation (expired sessions bounce to login).
+  useEffect(() => {
+    void auth.check()
+  }, [loc.pathname])
+  if (!auth.known()) return <div className="flex h-dvh items-center justify-center"><Spinner /></div>
   return auth.isLoggedIn() ? children : <Navigate to="/admin/login" replace state={{ from: loc.pathname }} />
 }
 

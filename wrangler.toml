@@ -1,0 +1,13 @@
+# Cloudflare Pages project config (static site in dist/ + Pages Functions in functions/).
+# Local development needs NO Cloudflare account: `npm run dev:api` uses a local D1 (SQLite in .wrangler/).
+name = "brasswood-booking"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-09-01"
+
+[[d1_databases]]
+binding = "DB"                     # env.DB in functions/
+database_name = "brasswood"
+# PLACEHOLDER — replace with the id printed by `npx wrangler d1 create brasswood` (see README, "Cloudflare setup").
+# Local mode ignores this value; remote commands and deploys will fail until it is a real id.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

@@ -1,12 +1,21 @@
 # Brasswood Barber Co. — Online Booking + Admin (demo)
 
 A complete appointment-booking product for a service business (barbershop, salon, studio, clinic):
-a fast customer booking flow and a full admin panel. Runs as a **static site with zero backend** —
-data lives in `localStorage` behind a repository interface, so it can be swapped for a real API.
+a fast customer booking flow and a full admin panel. Two builds from the same code:
+
+- **API build (default, `npm run build`)** — React SPA + **Cloudflare Pages Functions** (`/api/*`) + **Cloudflare D1**
+  (SQLite). Data is shared by all visitors and persists on the server; the admin panel needs a real password
+  checked on the server (HttpOnly session cookie).
+- **Static demo (`npm run build:demo`)** — the original zero-backend demo: data in each visitor's `localStorage`,
+  demo login `admin` / `demo`.
+
+> Status: implemented and tested **locally** (wrangler + local D1). It has **not** been deployed or tested against a
+> remote Cloudflare D1 yet — see "Before real customers" below.
 
 > Brasswood Barber Co. is a fictional business. All names, phones and emails in the seed data are made up.
 
-**Admin demo login:** `admin` / `demo` (shown on the login page).
+**Admin login:** API build — `ADMIN_USERNAME` / `ADMIN_PASSWORD` server secrets (nothing is shown on the login page).
+Static demo build — `admin` / `demo` (shown on the login page).
 
 ![Booking](shots/booking.png)
 
@@ -32,66 +41,158 @@ data lives in `localStorage` behind a repository interface, so it can be swapped
 - Hours & days off: weekly hours with breaks per specialist, staff or whole-shop days off
   (warns about affected bookings)
 - Clients: search, sort, booking history, total spent, no-shows, notes
-- "Reset demo data" regenerates a realistic, deterministic dataset around today's date
+- "Reset demo data" regenerates a realistic, deterministic dataset around today's date (static demo only)
 
 ## Stack
 
-Vite · React 19 · TypeScript · Tailwind CSS v4 · React Router · lucide-react. No backend, no tracking.
+Vite · React 19 · TypeScript · Tailwind CSS v4 · React Router · lucide-react.
+Backend: Cloudflare Pages Functions (TypeScript) · Cloudflare D1 · wrangler (devDependency only). No tracking.
 
 ## Architecture
 
 ```
-src/
-  lib/          types, date helpers, availability engine (pure functions), .ics export, demo auth
+src/                         React SPA (same UI for both builds)
+  lib/availability.ts        pure availability engine — used by the browser AND by the server
+  lib/auth.ts                picks serverAuth.ts (API) or demoAuth.ts (static demo) at build time
   data/
-    repository.ts            DataSource interface (services, staff, timeOff, clients, bookings, availability)
-    localStorageDataSource.ts  implementation on localStorage (simulated latency, cross-tab sync)
-    seed.ts                  deterministic seed: 8 services, 3 staff, ~3 weeks of bookings
-    index.ts                 `export const api: DataSource = new LocalStorageDataSource()`
-    hooks.ts                 useQuery / useCatalog (re-run on data changes)
-  components/   UI kit (buttons, inputs, modals, toasts, badges), calendar, booking modals
-  pages/booking/  customer flow + manage booking
-  pages/admin/    login, layout, dashboard, schedule, services, staff, hours, clients
+    repository.ts            DataSource interface
+    httpDataSource.ts        API build: fetch('/api/...'), 409 → BookingConflictError, 401 → back to login,
+                             refresh on tab focus / every 20 s / BroadcastChannel between tabs
+    localStorageDataSource.ts  static demo build
+    index.ts                 chooses the implementation from VITE_DATA_SOURCE (api | local)
+functions/api/               Cloudflare Pages Functions (file-based routing)
+  _middleware.ts             JSON errors, DB binding check
+  [[path]].ts                public API
+  admin/_middleware.ts       every /api/admin/* needs a valid session (else 401) and same Origin (else 403)
+  admin/[[path]].ts          admin API
+server/                      shared server code: router, validation, D1 repository, bookings, auth
+migrations/0001_init.sql     D1 schema (services, staff, hours, time off, clients, bookings, settings,
+                             admin_sessions, login_attempts)
+seed/seed.sql                base data: settings, services, staff, hours — no clients, no bookings
+                             (regenerate with `node scripts/gen-seed.mjs --base`)
+wrangler.toml                Pages project + D1 binding `DB` (database_id is a PLACEHOLDER)
 ```
 
-All UI talks to the async `DataSource` interface only. To go live, implement it with `fetch`
-calls to your API (Supabase, Cloudflare Workers + D1, Firebase, …) and change one line in `src/data/index.ts`.
-The availability engine in `src/lib/availability.ts` is pure and can be reused on the server.
+**Build switch.** `.env` sets `VITE_DATA_SOURCE=api`, `.env.demo` sets `local` (Vite *modes*, so no `cross-env`
+and the same commands work in PowerShell, cmd and bash). The value is a compile-time constant: the API bundle
+contains no demo login, no demo credentials, no seed data and no localStorage data source.
 
-## Run locally
+**API (all JSON).**
+
+| Public (no login) | Admin (`/api/admin/*`, session cookie) |
+|---|---|
+| `GET /api/health` | `GET/POST/PUT/DELETE /services`, `/staff`, `/time-off` |
+| `GET /api/services`, `/api/staff`, `/api/settings` | `GET /clients`, `GET/PUT /clients/:id` |
+| `GET /api/availability/slots · open-dates · next` | `GET /bookings?from&to&staffId&clientId&status`, `GET /bookings/:id` |
+| `POST /api/bookings` (always `source=online`, rules enforced) | `POST /bookings`, `PATCH /bookings/:id/status`, `POST /bookings/:id/reschedule`, `DELETE /bookings/:id` |
+| `GET /api/bookings/by-code/:code`, `POST …/cancel` | `PUT /settings` |
+| `GET /api/auth/me`, `POST /api/auth/login`, `POST /api/auth/logout` | |
+
+Public responses never contain client names, emails or phones (availability returns only times and
+specialist ids; a booking looked up by its code has `clientId` blanked).
+
+**No double booking.** The server recomputes availability with the same engine (hours, breaks, days off,
+minimum notice, horizon, existing bookings — in the shop's timezone from Settings) and then writes with a single
+atomic `INSERT … SELECT … WHERE NOT EXISTS (overlapping non-cancelled booking for that specialist)`;
+`UPDATE` for reschedule / restore uses the same guard. A partial UNIQUE index on `(staff_id, date, start_min)`
+is the last line of defence. Losing requests get **409**, and the UI sends the customer back to pick another time.
+
+**Admin auth.** `POST /api/auth/login` checks `ADMIN_USERNAME` + `ADMIN_PASSWORD` (≥ 10 chars) or
+`ADMIN_PASSWORD_HASH` (PBKDF2, `npm run hash-password -- "your password"`) with a constant-time compare.
+Success creates a random session token (only its SHA-256 is stored in D1, 12 h lifetime) in an
+`HttpOnly; SameSite=Strict; Secure` cookie scoped to `/api` (`Secure` is omitted only on localhost).
+5 failed logins per IP per 15 minutes → 429. Admin writes from another Origin → 403.
+
+## Run locally (API + local D1)
+
+Requires **Node.js 22+** (wrangler 4 does not run on Node 20). Commands are identical in PowerShell and bash.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
-npm run build      # production build → dist/
-npm run preview    # serve dist/ on http://localhost:4173
+cp .dev.vars.example .dev.vars        # PowerShell: Copy-Item .dev.vars.example .dev.vars
+#   then edit .dev.vars and set your own ADMIN_PASSWORD (≥ 10 characters)
+npm run db:migrate:local              # creates the local D1 in .wrangler/state (no Cloudflare account needed)
+npm run db:seed:local                 # services, staff, hours (no clients/bookings)
+npm run dev:api                       # build + wrangler pages dev → http://localhost:8788
 ```
 
-End-to-end smoke test (books an appointment, verifies it in admin, cancels it, mobile flow) and screenshots to `shots/`:
+Optional:
+
+- `npm run dev` (in a second terminal, while `dev:api` runs) — Vite with hot reload on http://localhost:5173,
+  `/api` is proxied to :8788.
+- `npm run db:seed:demo:local` — also load the demo clients/bookings into the local DB.
+- `npm run db:reset:local` — wipe the local DB and re-create it (migrate + base seed).
+- Static demo as before: `npm run dev:demo`, or `npm run build:demo` → `dist-demo/` and `npm run preview:demo`.
+
+Nothing here talks to your Cloudflare account: only `wrangler pages dev`, `wrangler d1 migrations apply --local`
+and `wrangler d1 execute --local` are used.
+
+## Tests
 
 ```bash
-npm run preview &
-CHROME_PATH=/path/to/chrome npm run e2e
-CHROME_PATH=/path/to/chrome npm run e2e:history   # browser Back/Forward/reload checks (desktop + mobile)
+npm run build && npm run e2e:api       # starts its own wrangler on :8799 with a throw-away local D1 (.wrangler/e2e-state)
+npm run dev:api                        # then, in another terminal:
+npm run e2e -- --mode=api              # UI smoke test against :8788
+npm run e2e:history -- --mode=api      # Back/Forward/reload checks against :8788
+npm run build:demo && npm run preview:demo   # static demo on :4173, then:
+npm run e2e                            # and npm run e2e:history
 ```
 
-## Deploy to Cloudflare Pages
+`e2e:api` proves: a booking made in one browser is visible in the admin of a separate fresh browser and the
+slot is taken there; data and sessions survive a server restart; 401 without a cookie, wrong password rejected,
+login rate limit, cross-origin writes rejected, admin password not in the bundle; public endpoints don't leak
+names/emails/phones; 10 parallel creates for one slot → exactly 1 × 201 + 9 × 409 (also for overlapping start
+times, admin creates and "any specialist"); reschedule into a taken/overlapping slot → 409.
 
-**Dashboard:** Workers & Pages → Create → Pages → connect the Git repo →
-Framework preset *Vite* (or none) · Build command `npm run build` · Output directory `dist`.
+The UI suites in `--mode=api` write to your local dev DB (`npm run db:reset:local` cleans it) and read the
+admin password from `.dev.vars`. Chrome is taken from `CHROME_PATH` (default `/usr/bin/google-chrome`);
+on Windows: `$env:CHROME_PATH="C:\Program Files\Google\Chrome\Application\chrome.exe"`.
+Screenshots go to `shots/` (`shots/api-*.png` for API mode).
 
-**CLI:**
+## Deploy to Cloudflare (do these yourself — nothing below has been run)
 
-```bash
-npm run build
-npx wrangler pages deploy dist --project-name brasswood-booking
-```
+1. `npx wrangler login` (opens the browser for your Cloudflare account).
+2. Create the database: `npx wrangler d1 create brasswood` — copy the printed `database_id`.
+3. Put it into `wrangler.toml` instead of `00000000-0000-0000-0000-000000000000` and commit.
+4. Create the schema remotely: `npx wrangler d1 migrations apply brasswood --remote`
+   and the base data: `npx wrangler d1 execute brasswood --remote --file seed/seed.sql`.
+5. Create the Pages project (once): `npx wrangler pages project create brasswood-booking --production-branch main`
+   (or create it in the dashboard).
+6. Set the admin secrets (choose a long, unique password, ≥ 10 characters):
+   `npx wrangler pages secret put ADMIN_PASSWORD --project-name brasswood-booking`
+   and `npx wrangler pages secret put ADMIN_USERNAME --project-name brasswood-booking`
+   (or Dashboard → Workers & Pages → project → Settings → Variables and Secrets, type *Secret*).
+   Alternatively store `ADMIN_PASSWORD_HASH` from `npm run hash-password -- "…"`.
+7. D1 binding: with `wrangler.toml` the binding `DB` → `brasswood` is applied on deploy. If you deploy via the
+   dashboard's Git integration and the binding does not appear, add it under Settings → Bindings → D1 database,
+   variable name **`DB`**, for Production (and Preview if you use it).
+8. Deploy, either
+   - CLI: `npm run build` then `npx wrangler pages deploy` (uses `pages_build_output_dir = dist`), or
+   - Git: connect the repo in the dashboard, build command `npm run build`, output directory `dist`,
+     environment variable `NODE_VERSION=22`. The `functions/` folder is picked up automatically.
+9. Check: `https://<project>.pages.dev/api/health` → `{"ok":true}`, `/api/admin/bookings` → 401, then log in at `/admin`.
 
-`public/_redirects` (`/* /index.html 200`) makes client-side routes like `/admin/schedule` work on refresh.
+The static demo can still be deployed separately (build `npm run build:demo`, output `dist-demo`; no D1 needed).
 
-## Demo limitations
+`public/_redirects` (`/* /index.html 200`) is kept for other static hosts. Cloudflare Pages warns that this rule
+loops and ignores it — that is harmless: Pages serves `index.html` for unknown paths of an SPA anyway
+(`/admin/schedule` on refresh works, verified locally with wrangler).
 
-- Data is stored per browser (`localStorage`); each visitor gets their own sandbox.
-- Admin auth is a demo gate (session storage), not real security.
-- No real email/SMS notifications — the confirmation screen notes that one would be emailed in the live product.
-- Times are shown in the visitor's local timezone.
+## Windows / PowerShell notes
+
+- Use Node 22+. `npm run …` scripts avoid `rm`, `cp` and inline `VAR=value` so they work in PowerShell/cmd.
+- In PowerShell set env vars with `$env:NAME="value"` (e.g. `CHROME_PATH`, `BASE_URL`, `E2E_PORT`), not `NAME=value cmd`.
+- Pass script arguments after `--`: `npm run e2e -- --mode=api`.
+- `.dev.vars` must be plain `KEY=value` lines; save it as UTF-8 (Notepad's default is fine).
+
+## Before real customers (not done / not verified yet)
+
+- Not deployed; **remote D1 has not been tested**. Run the checks in step 9 and a real booking after deploying.
+- One shared admin account (no per-staff users, no password reset, no 2FA). Rate limiting is per IP in D1.
+- No email/SMS confirmations or reminders. Anyone with a booking code can see (date, time, service, notes) and
+  cancel that booking; codes are random (6 chars from 32 symbols) but there is no rate limit on lookups yet.
+- No bot/spam protection on public booking (consider Cloudflare Turnstile) and no consent/privacy text.
+- The UI shows the browser's local time; the server uses the shop timezone from Settings (default
+  America/New_York). Visitors in other time zones may be confused.
+- Other admins' changes appear after focus / within ~20 s (polling), not instantly.
+- No backups configured (D1 Time Travel exists on Cloudflare — check your plan) and no monitoring.

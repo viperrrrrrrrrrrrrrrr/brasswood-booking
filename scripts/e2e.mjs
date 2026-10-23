@@ -1,10 +1,13 @@
-// End-to-end smoke test + screenshots against a running build (npm run preview).
-// Usage: BASE_URL=http://localhost:4173 CHROME_PATH=/usr/bin/google-chrome node scripts/e2e.mjs
+// End-to-end smoke test + screenshots against a running build.
+// Static demo: npm run build:demo && npm run preview:demo   then  npm run e2e
+// API + D1:    npm run dev:api                              then  npm run e2e -- --mode=api
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { BASE, CHROME, MODE, SHOT_PREFIX, allBookings, isExpectedConsoleError, uiLogin } from './e2e-lib.mjs'
 
-const BASE = process.env.BASE_URL ?? 'http://localhost:4173'
-const OUT = new URL('../shots/', import.meta.url).pathname
+console.log(`mode=${MODE} base=${BASE}`)
+const OUT = fileURLToPath(new URL('../shots/', import.meta.url))
 mkdirSync(OUT, { recursive: true })
 const results = []
 const ok = (name, cond, extra = '') => {
@@ -12,10 +15,10 @@ const ok = (name, cond, extra = '') => {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  — ' + extra : ''}`)
 }
 
-const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? '/usr/bin/google-chrome', args: ['--no-sandbox'] })
+const browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] })
 const errors = []
 
-async function bookFlow(page, { serviceId, staffId, mobile }) {
+async function bookFlow(page, { serviceId, staffId }) {
   await page.click(`[data-testid="service-${serviceId}"]`)
   await page.click(`[data-testid="staff-${staffId}"]`)
   await page.waitForSelector('[data-testid="slot"]')
@@ -25,7 +28,7 @@ async function bookFlow(page, { serviceId, staffId, mobile }) {
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 })
 const page = await ctx.newPage()
 page.on('pageerror', (e) => errors.push(e.message))
-page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+page.on('console', (m) => m.type() === 'error' && !isExpectedConsoleError(m.text()) && errors.push(m.text()))
 await page.goto(BASE + '/')
 await page.evaluate(() => localStorage.clear())
 await page.reload()
@@ -38,7 +41,7 @@ ok('Slots computed for Skin Fade with Marco', slotTexts.length > 0, `${date}: ${
 await page.waitForTimeout(300)
 await page.evaluate(() => window.scrollTo(0, 0))
 await page.waitForTimeout(300)
-await page.screenshot({ path: OUT + 'booking.png', fullPage: true })
+await page.screenshot({ path: OUT + SHOT_PREFIX + 'booking.png', fullPage: true })
 const chosen = slotTexts[1] ?? slotTexts[0]
 await page.locator('[data-testid="slot"]', { hasText: chosen }).first().click()
 await page.fill('input[name="name"]', 'Jordan Ellis')
@@ -50,25 +53,27 @@ await page.waitForSelector('[data-testid="booking-code"]')
 const code = (await page.textContent('[data-testid="booking-code"]')).trim()
 ok('Booking confirmed with code', /^BW-[A-Z0-9]{6}$/.test(code), code)
 await page.waitForTimeout(500)
-await page.screenshot({ path: OUT + 'booking-confirmation.png', fullPage: true })
+await page.screenshot({ path: OUT + SHOT_PREFIX + 'booking-confirmation.png', fullPage: true })
 
 // no double booking: same service/staff/date must not offer the booked time anymore
 await page.click('text=Book another appointment')
 await bookFlow(page, { serviceId: 'svc_fade', staffId: 'stf_marco' })
-await page.click(`[data-date="${date}"]`)
+// If the run happens late in the shop day, the booked slot may have been the last bookable one today,
+// in which case the date button becomes disabled — that also means the time is no longer offered.
+const dateOpen = await page.$eval(`[data-date="${date}"]`, (el) => !el.disabled).catch(() => false)
+if (dateOpen) await page.click(`[data-date="${date}"]`)
 await page.waitForTimeout(300)
-const after = await page.$$eval('[data-testid="slot"]', (els) => els.map((e) => e.textContent))
-ok('Booked time no longer offered (no double booking)', !after.includes(chosen), `${chosen} removed; ${after.length} slots left`)
+const after = dateOpen ? await page.$$eval('[data-testid="slot"]', (els) => els.map((e) => e.textContent)) : []
+ok('Booked time no longer offered (no double booking)', !after.includes(chosen), dateOpen ? `${chosen} removed; ${after.length} slots left` : `${date} is no longer bookable at all`)
 
 // ---------------- Admin ----------------
 await page.goto(BASE + '/admin')
 await page.waitForURL('**/admin/login')
 ok('Admin requires login', page.url().endsWith('/admin/login'))
-await page.click('text=Fill in')
-await page.click('button[type="submit"]')
+await uiLogin(page)
 await page.waitForSelector('text=Revenue · last 7 days')
 await page.waitForTimeout(500)
-await page.screenshot({ path: OUT + 'admin-dashboard.png' })
+await page.screenshot({ path: OUT + SHOT_PREFIX + 'admin-dashboard.png' })
 ok('Dashboard renders KPIs', await page.isVisible('text=Today’s bookings'))
 
 // Schedule: find the new booking
@@ -81,13 +86,13 @@ for (let i = 0; i < 6 && !found; i++) {
   if (!found) await page.click('button[aria-label="Next"]')
 }
 ok('New booking appears in admin schedule (week view)', found)
-await page.screenshot({ path: OUT + 'admin-calendar.png' })
+await page.screenshot({ path: OUT + SHOT_PREFIX + 'admin-calendar.png' })
 await page.click(`[data-testid="booking-block"][data-code="${code}"]`)
 await page.waitForSelector('text=Jordan Ellis')
 ok('Booking details show client', await page.isVisible('text=jordan.ellis@example.com'))
 await page.click('[data-testid="status-completed"]')
 await page.waitForSelector('[data-testid="status-completed"][aria-checked="true"]')
-ok('Status change persisted (completed)', (await page.evaluate((c) => JSON.parse(localStorage.getItem('brasswood-booking-demo')).bookings.find((b) => b.code === c).status, code)) === 'completed')
+ok('Status change persisted (completed)', (await allBookings(page)).find((b) => b.code === code)?.status === 'completed')
 await page.click('[data-testid="status-confirmed"]')
 await page.waitForSelector('[data-testid="status-confirmed"][aria-checked="true"]')
 await page.click('text=Done')
@@ -96,7 +101,7 @@ await page.click('text=Done')
 await page.click('[data-testid="view-day"]')
 await page.click('button:has-text("Today")')
 await page.waitForTimeout(4500) // let toasts fade
-await page.screenshot({ path: OUT + 'admin-calendar-day.png' })
+await page.screenshot({ path: OUT + SHOT_PREFIX + 'admin-calendar-day.png' })
 
 // Clients: search
 await page.click('nav >> text=Clients')
@@ -114,7 +119,7 @@ await page.click('text=Cancel booking')
 await page.click('[data-testid="confirm-cancel"]')
 await page.waitForSelector('text=This booking is cancelled')
 ok('Client can cancel by code', true)
-const freed = await page.evaluate((c) => JSON.parse(localStorage.getItem('brasswood-booking-demo')).bookings.find((b) => b.code === c).status, code)
+const freed = (await allBookings(page)).find((b) => b.code === code)?.status
 ok('Cancelled status stored', freed === 'cancelled')
 await page.goto(BASE + '/')
 await bookFlow(page, { serviceId: 'svc_fade', staffId: 'stf_marco' })
@@ -131,12 +136,12 @@ m.on('pageerror', (e) => errors.push('mobile: ' + e.message))
 await m.goto(BASE + '/')
 await m.waitForSelector('[data-testid="service-svc_cut"]')
 await m.waitForTimeout(800)
-await m.screenshot({ path: OUT + 'booking-mobile-services.png' })
+await m.screenshot({ path: OUT + SHOT_PREFIX + 'booking-mobile-services.png' })
 await m.click('[data-testid="service-svc_cut"]')
 await m.click('[data-testid="staff-any"]')
 await m.waitForSelector('[data-testid="slot"]')
 await m.waitForTimeout(700)
-await m.screenshot({ path: OUT + 'booking-mobile.png' })
+await m.screenshot({ path: OUT + SHOT_PREFIX + 'booking-mobile.png' })
 await m.locator('[data-testid="slot"]').first().click()
 await m.fill('input[name="name"]', 'Sam Okoye')
 await m.fill('input[name="phone"]', '(555) 017-2210')
@@ -145,13 +150,12 @@ await m.click('[data-testid="confirm-mobile"]')
 await m.waitForSelector('[data-testid="booking-code"]')
 ok('Mobile booking completes ("any specialist")', true, (await m.textContent('[data-testid="booking-code"]')).trim())
 await m.waitForTimeout(600)
-await m.screenshot({ path: OUT + 'booking-mobile-confirmation.png' })
+await m.screenshot({ path: OUT + SHOT_PREFIX + 'booking-mobile-confirmation.png' })
 await m.goto(BASE + '/admin/login')
-await m.click('text=Fill in')
-await m.click('button[type="submit"]')
+await uiLogin(m)
 await m.waitForSelector('text=Revenue · last 7 days')
 await m.waitForTimeout(400)
-await m.screenshot({ path: OUT + 'admin-dashboard-mobile.png' })
+await m.screenshot({ path: OUT + SHOT_PREFIX + 'admin-dashboard-mobile.png' })
 await mctx.close()
 
 ok('No uncaught page/console errors', errors.length === 0, errors.slice(0, 3).join(' | '))

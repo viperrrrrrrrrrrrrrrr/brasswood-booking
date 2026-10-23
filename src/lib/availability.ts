@@ -7,6 +7,11 @@ export interface AvailabilityContext {
   bookings: Booking[]
   timeOff: TimeOff[]
   settings: BusinessSettings
+  /**
+   * "Now" in the shop's timezone. The browser demo omits it (uses the device clock);
+   * the server passes it explicitly because Workers run in UTC.
+   */
+  now?: { date: DateStr; minutes: number }
 }
 
 export interface AvailabilityQuery {
@@ -46,14 +51,14 @@ export function eligibleStaff(ctx: AvailabilityContext, serviceId: ID): StaffMem
 export function getSlots(ctx: AvailabilityContext, q: AvailabilityQuery): Slot[] {
   const service = ctx.services.find((s) => s.id === q.serviceId)
   if (!service) return []
-  const today = todayStr()
+  const today = ctx.now?.date ?? todayStr()
   if (!q.ignoreRules) {
     if (q.date < today) return []
     if (q.date > addDays(today, ctx.settings.horizonDays)) return []
   }
   const candidates = q.staffId === 'any' ? eligibleStaff(ctx, q.serviceId) : eligibleStaff(ctx, q.serviceId).filter((s) => s.id === q.staffId)
   const step = ctx.settings.slotStepMin
-  const earliest = !q.ignoreRules && q.date === today ? nowMinutes() + ctx.settings.minNoticeMin : -1
+  const earliest = !q.ignoreRules && q.date === today ? (ctx.now?.minutes ?? nowMinutes()) + ctx.settings.minNoticeMin : -1
   const map = new Map<number, ID[]>()
   for (const member of candidates) {
     const hours = member.hours[dayOfWeek(q.date)]
@@ -77,4 +82,30 @@ export function pickStaff(ctx: AvailabilityContext, staffIds: ID[], date: DateSt
   const load = (id: ID) =>
     ctx.bookings.filter((b) => b.staffId === id && b.date === date && b.status !== 'cancelled').reduce((sum, b) => sum + (b.end - b.start), 0)
   return [...staffIds].sort((a, b) => load(a) - load(b))[0]
+}
+
+export type NextAvailable = Record<string, { date: DateStr; start: number } | null>
+
+/** First free slot per specialist id (or 'any') within the booking horizon. Returns no personal data. */
+export function nextAvailable(ctx: AvailabilityContext, serviceId: ID, staffIds: (ID | 'any')[]): NextAvailable {
+  const today = ctx.now?.date ?? todayStr()
+  const out: NextAvailable = {}
+  for (const id of staffIds) {
+    out[id] = null
+    for (let i = 0; i <= ctx.settings.horizonDays; i++) {
+      const d = addDays(today, i)
+      const slots = getSlots(ctx, { serviceId, staffId: id, date: d })
+      if (slots.length) { out[id] = { date: d, start: slots[0].start }; break }
+    }
+  }
+  return out
+}
+
+/** Dates in [from,to] that have at least one free slot. */
+export function openDates(ctx: AvailabilityContext, serviceId: ID, staffId: ID | 'any', from: DateStr, to: DateStr): DateStr[] {
+  const out: DateStr[] = []
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    if (getSlots(ctx, { serviceId, staffId, date: d }).length) out.push(d)
+  }
+  return out
 }

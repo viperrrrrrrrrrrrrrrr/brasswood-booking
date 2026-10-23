@@ -1,13 +1,10 @@
-/** Demo-only auth. A real deployment would use the backend's session/JWT. */
-const KEY = 'brasswood-admin-session'
-export const DEMO_CREDENTIALS = { username: 'admin', password: 'demo' }
+import type { AuthClient } from './authTypes'
+import { demoAuth } from './demoAuth'
+import { serverAuth } from './serverAuth'
 
-export const auth = {
-  isLoggedIn: () => sessionStorage.getItem(KEY) === '1',
-  login(username: string, password: string) {
-    const ok = username.trim().toLowerCase() === DEMO_CREDENTIALS.username && password === DEMO_CREDENTIALS.password
-    if (ok) sessionStorage.setItem(KEY, '1')
-    return ok
-  },
-  logout: () => sessionStorage.removeItem(KEY),
-}
+/**
+ * `import.meta.env.VITE_DATA_SOURCE` is replaced at build time, so the unused implementation
+ * (and, in the default api build, the demo credentials) is removed from the bundle entirely.
+ */
+export const auth: AuthClient = import.meta.env.VITE_DATA_SOURCE === 'local' ? demoAuth : serverAuth
+export type { AuthClient }
