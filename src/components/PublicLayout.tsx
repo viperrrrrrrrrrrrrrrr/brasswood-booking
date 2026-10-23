@@ -31,7 +31,7 @@ export function PublicLayout({ children, stickyBar, settings }: { children: Reac
           <nav className="flex items-center gap-1">
             <NavLink to="/" end className={link}>Book</NavLink>
             <NavLink to="/manage" className={link}>My booking</NavLink>
-            <Link to="/admin" className="ml-1 hidden rounded-md px-3 py-1.5 text-sm font-medium text-brand-300 ring-1 ring-inset ring-brand-400/40 transition-colors hover:bg-brand-400/10 sm:inline-block">Admin demo</Link>
+            <Link to="/admin" className="ml-1 hidden rounded-md px-3 py-1.5 text-sm font-medium text-brand-300 ring-1 ring-inset ring-brand-400/40 transition-colors hover:bg-brand-400/10 sm:inline-block">{import.meta.env.VITE_DATA_SOURCE === 'local' ? 'Admin demo' : 'Admin'}</Link>
           </nav>
         </div>
       </header>
