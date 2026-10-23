@@ -227,6 +227,14 @@ export const adminRouter = new Router()
     if (!r) throw notFound('Client not found')
     return json(mapClient(r))
   })
+  /** Hard-deletes a client that has no bookings (any status) — 409 otherwise. Used for test clean-up / GDPR erasure. */
+  .delete('/clients/:id', async ({ env, params }) => {
+    const n = await env.DB.prepare('SELECT count(*) AS n FROM bookings WHERE client_id = ?').bind(params.id).first<{ n: number }>()
+    if ((n?.n ?? 0) > 0) throw conflict('Client still has bookings — delete those first.')
+    const r = await env.DB.prepare('DELETE FROM clients WHERE id = ?').bind(params.id).run()
+    if (!r.meta.changes) throw notFound('Client not found')
+    return noContent()
+  })
   .put('/clients/:id', async ({ env, req, params }) => {
     const b = await readJson(req)
     const cur = await env.DB.prepare('SELECT id, name, phone, email, notes, created_at FROM clients WHERE id = ?').bind(params.id).first<ClientRow>()

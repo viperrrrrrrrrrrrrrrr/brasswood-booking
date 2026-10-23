@@ -138,6 +138,11 @@ npm run build:demo && npm run preview:demo   # static demo on :4173, then:
 npm run e2e                            # and npm run e2e:history
 ```
 
+```bash
+npm run check:bundle                   # build + functions bundle; fails if the .dev.vars password / demo login is inside
+npm run verify:remote:local            # proves scripts/verify-remote.mjs against local wrangler + throw-away D1, row counts before = after
+```
+
 `e2e:api` proves: a booking made in one browser is visible in the admin of a separate fresh browser and the
 slot is taken there; data and sessions survive a server restart; 401 without a cookie, wrong password rejected,
 login rate limit, cross-origin writes rejected, admin password not in the bundle; public endpoints don't leak
@@ -151,26 +156,21 @@ Screenshots go to `shots/` (`shots/api-*.png` for API mode).
 
 ## Deploy to Cloudflare (do these yourself — nothing below has been run)
 
-1. `npx wrangler login` (opens the browser for your Cloudflare account).
-2. Create the database: `npx wrangler d1 create brasswood` — copy the printed `database_id`.
-3. Put it into `wrangler.toml` instead of `00000000-0000-0000-0000-000000000000` and commit.
-4. Create the schema remotely: `npx wrangler d1 migrations apply brasswood --remote`
-   and the base data: `npx wrangler d1 execute brasswood --remote --file seed/seed.sql`.
-5. Create the Pages project (once): `npx wrangler pages project create brasswood-booking --production-branch main`
-   (or create it in the dashboard).
-6. Set the admin secrets (choose a long, unique password, ≥ 10 characters):
-   `npx wrangler pages secret put ADMIN_PASSWORD --project-name brasswood-booking`
-   and `npx wrangler pages secret put ADMIN_USERNAME --project-name brasswood-booking`
-   (or Dashboard → Workers & Pages → project → Settings → Variables and Secrets, type *Secret*).
-   Alternatively store `ADMIN_PASSWORD_HASH` from `npm run hash-password -- "…"`.
-7. D1 binding: with `wrangler.toml` the binding `DB` → `brasswood` is applied on deploy. If you deploy via the
-   dashboard's Git integration and the binding does not appear, add it under Settings → Bindings → D1 database,
-   variable name **`DB`**, for Production (and Preview if you use it).
-8. Deploy, either
-   - CLI: `npm run build` then `npx wrangler pages deploy` (uses `pages_build_output_dir = dist`), or
-   - Git: connect the repo in the dashboard, build command `npm run build`, output directory `dist`,
-     environment variable `NODE_VERSION=22`. The `functions/` folder is picked up automatically.
-9. Check: `https://<project>.pages.dev/api/health` → `{"ok":true}`, `/api/admin/bookings` → 401, then log in at `/admin`.
+Step-by-step runbook (Russian, PowerShell): **[docs/REMOTE_TEST.md](docs/REMOTE_TEST.md)** — a separate TEST
+environment: Pages project `brasswood-test` + D1 `brasswood-test`. In short:
+
+1. `npx wrangler login` (or `$env:CLOUDFLARE_API_TOKEN` with Account → D1 Edit + Account → Cloudflare Pages Edit, and `$env:CLOUDFLARE_ACCOUNT_ID`).
+2. `npx wrangler d1 create brasswood-test` → `npm run remote:set-db-id -- <database_id>` → `npm run remote:check`.
+3. `npx wrangler d1 migrations apply brasswood-test --remote --env production`, then
+   `npx wrangler d1 execute brasswood-test --remote --env production --file seed/seed.sql` (no clients, no bookings).
+4. `npx wrangler pages project create brasswood-test --production-branch main`.
+5. `npx wrangler pages secret put ADMIN_USERNAME|ADMIN_PASSWORD --project-name brasswood-test` (use `ADMIN_PASSWORD`, not the PBKDF2 hash, on the Free plan — 10 ms CPU limit).
+6. `npm run deploy:test` (= `remote:check` + `check:bundle` + `wrangler pages deploy dist --project-name brasswood-test --branch main`).
+7. `/api/health` → `{"ok":true,"db":"ok","seeded":true}`, then `npm run verify:remote` with `BASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`.
+
+`wrangler.toml` layout: the top level is **local dev only** (D1 `brasswood`, placeholder id that is never deployed);
+`[env.production]` / `[env.preview]` point at D1 `brasswood-test` and contain a placeholder id that
+`npm run remote:check` refuses until it is replaced. `name = "brasswood-test"`, so a deploy can never land on another project.
 
 The static demo can still be deployed separately (build `npm run build:demo`, output `dist-demo`; no D1 needed).
 
@@ -187,12 +187,18 @@ loops and ignores it — that is harmless: Pages serves `index.html` for unknown
 
 ## Before real customers (not done / not verified yet)
 
-- Not deployed; **remote D1 has not been tested**. Run the checks in step 9 and a real booking after deploying.
+- Not deployed; **remote D1 has not been tested**. Follow docs/REMOTE_TEST.md (`npm run verify:remote` + the manual browser check).
+- Admin polling refetches full lists every 20 s (dashboard: 41 days of bookings + all clients; Clients page: ALL bookings + clients).
+  With months of data one open admin tab can approach the D1 Free limit of 5M rows read/day (then D1 errors until 00:00 UTC,
+  also for public booking). Before real use: add a cheap "changed since" check (1-row read) and refetch only on change.
 - One shared admin account (no per-staff users, no password reset, no 2FA). Rate limiting is per IP in D1.
 - No email/SMS confirmations or reminders. Anyone with a booking code can see (date, time, service, notes) and
   cancel that booking; codes are random (6 chars from 32 symbols) but there is no rate limit on lookups yet.
 - No bot/spam protection on public booking (consider Cloudflare Turnstile) and no consent/privacy text.
 - The UI shows the browser's local time; the server uses the shop timezone from Settings (default
   America/New_York). Visitors in other time zones may be confused.
+  **Confirmed bug (2026-10-23):** a same-day booking made in the late afternoon (shop time) is treated as "past" by a
+  browser in UTC, so "Cancel booking" is hidden (`ManagePage` uses browser `nowMinutes()`). `npm run e2e -- --mode=api`
+  fails on this after ~17:00 UTC; run it with `TZ=America/New_York` until the UI uses the shop timezone.
 - Other admins' changes appear after focus / within ~20 s (polling), not instantly.
 - No backups configured (D1 Time Travel exists on Cloudflare — check your plan) and no monitoring.

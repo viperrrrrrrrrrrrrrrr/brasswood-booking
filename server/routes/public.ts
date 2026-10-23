@@ -16,7 +16,15 @@ const dateParam = (v: string, k: string) => {
 }
 
 export const publicRouter = new Router()
-  .get('/health', () => json({ ok: true }))
+  /** Liveness + D1 binding/schema/seed check (2 tiny reads). Used by docs/REMOTE_TEST.md and scripts/verify-remote.mjs. */
+  .get('/health', async ({ env }) => {
+    try {
+      const r = await env.DB.prepare('SELECT (SELECT count(*) FROM settings) AS settings, (SELECT count(*) FROM services) AS services').first<{ settings: number; services: number }>()
+      return json({ ok: true, db: 'ok', seeded: (r?.settings ?? 0) > 0 && (r?.services ?? 0) > 0 })
+    } catch {
+      return json({ ok: false, db: 'error', message: 'D1 is bound but the schema is missing — apply migrations' }, 503)
+    }
+  })
 
   .get('/services', async ({ env }) => json((await loadCatalog(env.DB)).services))
   .get('/services/:id', async ({ env, params }) => {

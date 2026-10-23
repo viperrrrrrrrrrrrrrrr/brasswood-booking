@@ -1,13 +1,41 @@
 # Cloudflare Pages project config (static site in dist/ + Pages Functions in functions/).
-# Local development needs NO Cloudflare account: `npm run dev:api` uses a local D1 (SQLite in .wrangler/).
-name = "brasswood-booking"
+#
+# Three layers (Pages supports ONLY [env.preview] and [env.production] overrides):
+#   top level        -> LOCAL development only (`wrangler pages dev`, `--local` D1 commands). No account needed.
+#   [env.production] -> deployments of the `brasswood-test` Pages project on its production branch (`main`).
+#   [env.preview]    -> any other branch of the same project (also points at the TEST database).
+# Both remote environments use the SEPARATE test database `brasswood-test`. The older static demo that is
+# already published on Cloudflare Pages is a different project and is never referenced here.
+# Runbook: docs/REMOTE_TEST.md
+
+# Default project name for `wrangler pages deploy` — the TEST project, so a deploy without
+# --project-name can never land on another (older) project.
+name = "brasswood-test"
 pages_build_output_dir = "dist"
 compatibility_date = "2025-09-01"
 
+# ---- local development (top level) ----
 [[d1_databases]]
 binding = "DB"                     # env.DB in functions/
 database_name = "brasswood"
-# PLACEHOLDER — replace with the id printed by `npx wrangler d1 create brasswood` (see README, "Cloudflare setup").
-# Local mode ignores this value; remote commands and deploys will fail until it is a real id.
+# Local-only placeholder: `wrangler pages dev` / `--local` keep data in .wrangler/state and ignore this id.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# ---- remote TEST environment: production branch of the `brasswood-test` Pages project ----
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "brasswood-test"
+# PLACEHOLDER — must be replaced by the id printed by `npx wrangler d1 create brasswood-test`:
+#   npm run remote:set-db-id -- <database_id>
+# `npm run remote:check` refuses to continue while it is still all zeros.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# ---- remote TEST environment: preview branches of the same project (same test database) ----
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "brasswood-test"
+# PLACEHOLDER — same id as env.production (set by `npm run remote:set-db-id`).
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"

@@ -52,8 +52,8 @@ export function createSeed(): DbState {
   const settings: BusinessSettings = {
     name: 'Brasswood Barber Co.',
     tagline: 'Classic cuts, sharp fades and hot-towel shaves.',
-    address: '418 Alder Street, Riverton',
-    phone: '(555) 014-2290',
+    address: '418 Alder Street, Riverton (fictional)',
+    phone: '(555) 555-0142',
     email: 'hello@brasswood.example',
     slotStepMin: 15,
     minNoticeMin: 60,
