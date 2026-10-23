@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import { api } from '../../data'
 import { useCatalog, useQuery } from '../../data/hooks'
-import type { Booking, Client, DateStr, Service, StaffMember, TimeOff } from '../../lib/types'
+import type { Booking, DateStr, Service, StaffMember, TimeOff } from '../../lib/types'
 import { addDays, dayOfWeek, fmtDate, fmtTime, nowMinutes, parseDate, startOfWeek, todayStr, WEEKDAYS_SHORT } from '../../lib/date'
 import { Avatar, Button, Card, STATUS_STYLE, Spinner, cn } from '../../components/ui'
 import { BookingDetailsModal, BookingFormModal } from '../../components/BookingModals'
 import { PageHeader } from './AdminLayout'
 
 const PX_PER_MIN = 1.35
+type ClientName = { name: string }
 type View = 'day' | 'week'
 
 export default function SchedulePage() {
@@ -23,10 +24,10 @@ export default function SchedulePage() {
 
   const from = view === 'day' ? date : startOfWeek(date)
   const to = view === 'day' ? date : addDays(from, 6)
-  const bookings = useQuery(() => api.bookings.list({ from, to }), [from, to])
-  const clients = useQuery(() => api.clients.list(), [])
-  const timeOff = useQuery(() => api.timeOff.list(), [])
-  const clientMap = useMemo(() => new Map((clients.data ?? []).map((c) => [c.id, c])), [clients.data])
+  // Client names joined in by the data source (withClient) instead of loading every client.
+  const bookings = useQuery(() => api.bookings.list({ from, to, withClient: true }), [from, to], ['bookings', 'clients'])
+  const timeOff = useQuery(() => api.timeOff.list(), [], ['catalog'])
+  const clientMap = useMemo(() => new Map((bookings.data ?? []).map((b) => [b.clientId, { name: b.clientName ?? '' }])), [bookings.data])
   const visibleStaff = staff.filter((s) => s.active && !hidden.has(s.id))
 
   const days = view === 'day' ? [date] : Array.from({ length: 7 }, (_, i) => addDays(from, i))
@@ -98,7 +99,7 @@ export default function SchedulePage() {
 }
 
 interface GridProps {
-  view: View; days: DateStr[]; staff: StaffMember[]; bookings: Booking[]; services: Service[]; clientMap: Map<string, Client>; timeOff: TimeOff[]
+  view: View; days: DateStr[]; staff: StaffMember[]; bookings: Booking[]; services: Service[]; clientMap: Map<string, ClientName>; timeOff: TimeOff[]
   dayStart: number; dayEnd: number
   onOpen: (id: string) => void; onEmpty: (date: DateStr, staffId: string, start: number) => void; onDayClick: (d: DateStr) => void
 }
@@ -166,7 +167,7 @@ function Grid({ view, days, staff, bookings, services, clientMap, timeOff, daySt
 const hatch = 'bg-[repeating-linear-gradient(135deg,#fafaf9_0_6px,#f0efed_6px_8px)]'
 
 function Lane({ member, date, bookings, services, clientMap, off, dayStart, dayEnd, compact, onOpen, onEmpty }: {
-  member: StaffMember; date: DateStr; bookings: Booking[]; services: Service[]; clientMap: Map<string, Client>; off?: TimeOff
+  member: StaffMember; date: DateStr; bookings: Booking[]; services: Service[]; clientMap: Map<string, ClientName>; off?: TimeOff
   dayStart: number; dayEnd: number; compact: boolean; onOpen: (id: string) => void; onEmpty: (d: DateStr, staffId: string, start: number) => void
 }) {
   const h = member.hours[dayOfWeek(date)]

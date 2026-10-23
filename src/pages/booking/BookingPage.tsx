@@ -3,8 +3,10 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { ArrowLeft, Check, Clock, MapPin, Phone, Scissors, Users, CalendarDays, CalendarPlus, Sparkles, ChevronRight, Sun, Sunset, Moon } from 'lucide-react'
 import { api, BookingConflictError, IS_DEMO } from '../../data'
 import { useCatalog, useQuery } from '../../data/hooks'
+import type { DataScope } from '../../data/repository'
+import { browserDiffersFromShop, shopTimeZoneCity } from '../../lib/shopTime'
 import type { Booking, DateStr, ID, Service, Slot, StaffMember } from '../../lib/types'
-import { addDays, fmtDate, fmtDateLong, fmtDuration, fmtTime, todayStr, usd, WEEKDAYS_SHORT } from '../../lib/date'
+import { addDays, dayOfWeek, fmtDate, fmtDateLong, fmtDuration, fmtTime, todayStr, usd, WEEKDAYS_SHORT } from '../../lib/date'
 import { Avatar, Button, Card, Field, Input, Spinner, Textarea, cn, useToast } from '../../components/ui'
 import { MonthCalendar, monthKey, monthRange } from '../../components/MonthCalendar'
 import { PublicLayout } from '../../components/PublicLayout'
@@ -86,7 +88,7 @@ export default function BookingPage() {
   }
 
   // Confirmation is addressed by code (`/?confirmed=BW-…`) so a reload keeps it and nothing is resubmitted.
-  const lookup = useQuery(() => (confirmedCode && confirmed?.code !== confirmedCode ? api.bookings.findByCode(confirmedCode) : Promise.resolve(undefined)), [confirmedCode, confirmed?.code])
+  const lookup = useQuery(() => (confirmedCode && confirmed?.code !== confirmedCode ? api.bookings.findByCode(confirmedCode) : Promise.resolve(undefined)), [confirmedCode, confirmed?.code], ['bookings'])
   const shown = confirmedCode ? (confirmed?.code === confirmedCode ? confirmed : lookup.data ?? null) : null
   useEffect(() => {
     if (confirmedCode && confirmed?.code !== confirmedCode && !lookup.loading && !lookup.data && !navPending.current) navigate('/', { replace: true })
@@ -326,9 +328,12 @@ function ServiceStep({ services, value, onPick }: { services: Service[]; value: 
   )
 }
 
+/** Availability depends on the catalog (hours, days off, services) and on bookings. */
+const AVAIL: readonly DataScope[] = ['catalog', 'bookings']
+
 function useNextAvailable(service: Service, staffIds: (ID | 'any')[]) {
   // Computed by the data source (server-side in API mode) — the public page never loads other clients' bookings.
-  return useQuery(() => api.availability.getNextAvailable(service.id, staffIds), [service.id, staffIds.join()])
+  return useQuery(() => api.availability.getNextAvailable(service.id, staffIds), [service.id, staffIds.join()], AVAIL)
 }
 
 function nextLabel(n?: { date: DateStr; start: number } | null) {
@@ -389,7 +394,7 @@ function TimeStep({ service, staffId, staff, date, onDate, slot, onSlot, horizon
   const maxDate = addDays(today, horizonDays)
   const [month, setMonth] = useState(monthKey(date ?? today))
   const { first, last } = monthRange(month)
-  const open = useQuery(() => api.availability.getOpenDates(service.id, staffId, first < today ? today : first, last > maxDate ? maxDate : last), [service.id, staffId, month])
+  const open = useQuery(() => api.availability.getOpenDates(service.id, staffId, first < today ? today : first, last > maxDate ? maxDate : last), [service.id, staffId, month], AVAIL)
   const openSet = useMemo(() => new Set(open.data ?? []), [open.data])
 
   // auto-select first open date
@@ -397,7 +402,7 @@ function TimeStep({ service, staffId, staff, date, onDate, slot, onSlot, horizon
     if (!date && open.data?.length) onDate(open.data[0])
   }, [open.data, date, onDate])
 
-  const slots = useQuery(() => (date ? api.availability.getSlots({ serviceId: service.id, staffId, date }) : Promise.resolve([])), [service.id, staffId, date])
+  const slots = useQuery(() => (date ? api.availability.getSlots({ serviceId: service.id, staffId, date }) : Promise.resolve([])), [service.id, staffId, date], AVAIL)
   const groups = useMemo(() => {
     const g: { label: string; icon: ReactNode; items: Slot[] }[] = [
       { label: 'Morning', icon: <Sun className="size-4" />, items: [] },
@@ -410,7 +415,7 @@ function TimeStep({ service, staffId, staff, date, onDate, slot, onSlot, horizon
 
   // quick date strip for mobile
   const strip = useMemo(() => Array.from({ length: 14 }, (_, i) => addDays(today, i)), [today])
-  const stripOpen = useQuery(() => api.availability.getOpenDates(service.id, staffId, strip[0], strip[13]), [service.id, staffId])
+  const stripOpen = useQuery(() => api.availability.getOpenDates(service.id, staffId, strip[0], strip[13]), [service.id, staffId, strip[0]], AVAIL)
   const stripSet = new Set(stripOpen.data ?? [])
   const who = staffId === 'any' ? 'any specialist' : staff.find((s) => s.id === staffId)?.name
 
@@ -424,7 +429,7 @@ function TimeStep({ service, staffId, staff, date, onDate, slot, onSlot, horizon
           return (
             <button key={d} disabled={!enabled} onClick={() => { onDate(d); setMonth(monthKey(d)) }}
               className={cn('flex w-14 shrink-0 flex-col items-center rounded-xl py-2 ring-1 transition', sel ? 'bg-ink text-white ring-ink' : enabled ? 'bg-white ring-stone-200' : 'bg-stone-50 text-stone-300 ring-stone-100')}>
-              <span className="text-[11px] font-medium uppercase">{WEEKDAYS_SHORT[new Date(d + 'T00:00').getDay()]}</span>
+              <span className="text-[11px] font-medium uppercase">{WEEKDAYS_SHORT[dayOfWeek(d)]}</span>
               <span className="text-lg font-semibold leading-tight">{Number(d.slice(8))}</span>
             </button>
           )
@@ -438,7 +443,7 @@ function TimeStep({ service, staffId, staff, date, onDate, slot, onSlot, horizon
         <div>
           {date ? (
             <>
-              <p className="mb-3 flex items-center gap-2 font-medium"><CalendarDays className="size-4 text-stone-400" />{fmtDateLong(date)}</p>
+              <p className="mb-3 flex flex-wrap items-center gap-2 font-medium"><CalendarDays className="size-4 text-stone-400" />{fmtDateLong(date)}{browserDiffersFromShop() && <span className="text-xs font-normal text-stone-400" data-testid="shop-time-hint">Times shown in shop time ({shopTimeZoneCity()})</span>}</p>
               {slots.loading && !slots.data ? (
                 <Spinner />
               ) : groups.length === 0 ? (

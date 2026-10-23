@@ -11,8 +11,8 @@ type Draft = Omit<Service, 'id'> & { id?: string }
 const EMPTY: Draft = { name: '', description: '', category: 'Hair', durationMin: 30, priceUsd: 30, active: true }
 
 export default function ServicesPage() {
-  const services = useQuery(() => api.services.list(), [])
-  const bookings = useQuery(() => api.bookings.list({ from: todayStr(), status: ['confirmed'] }), [])
+  const services = useQuery(() => api.services.list(), [], ['catalog'])
+  const bookings = useQuery(() => api.bookings.list({ from: todayStr(), status: ['confirmed'] }), [], ['bookings'])
   const [draft, setDraft] = useState<Draft | null>(null)
   const toast = useToast()
 

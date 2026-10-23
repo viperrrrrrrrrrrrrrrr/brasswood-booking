@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { addDays, pad, parseDate, todayStr } from '../lib/date'
+import { addDays, dayOfWeek, pad, parseDate, todayStr } from '../lib/date'
 import type { DateStr } from '../lib/types'
 import { cn } from './ui'
 
@@ -32,7 +32,7 @@ interface Props {
 
 export function MonthCalendar({ month, onMonthChange, value, onChange, isEnabled, minMonth, maxMonth, loading }: Props) {
   const { first, last } = monthRange(month)
-  const firstDow = (parseDate(first).getDay() + 6) % 7 // Monday-first
+  const firstDow = (dayOfWeek(first) + 6) % 7 // Monday-first
   const days: (DateStr | null)[] = Array(firstDow).fill(null)
   for (let d = first; d <= last; d = addDays(d, 1)) days.push(d)
   const today = todayStr()

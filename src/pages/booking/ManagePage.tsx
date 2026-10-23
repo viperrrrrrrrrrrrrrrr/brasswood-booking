@@ -4,7 +4,8 @@ import { Search, XCircle, CalendarDays, Clock, User } from 'lucide-react'
 import { api } from '../../data'
 import { useCatalog } from '../../data/hooks'
 import type { Booking } from '../../lib/types'
-import { fmtDateLong, fmtTime, todayStr, nowMinutes, usd } from '../../lib/date'
+import { fmtDateLong, fmtTime, usd } from '../../lib/date'
+import { browserDiffersFromShop, canCancelOnline, shopNow, shopTimeZoneCity } from '../../lib/shopTime'
 import { Button, Card, Field, Input, StatusBadge, useToast } from '../../components/ui'
 import { PublicLayout } from '../../components/PublicLayout'
 
@@ -52,7 +53,8 @@ export default function ManagePage() {
 
   const service = services.find((s) => s.id === booking?.serviceId)
   const member = staff.find((s) => s.id === booking?.staffId)
-  const isPast = booking && (booking.date < todayStr() || (booking.date === todayStr() && booking.start <= nowMinutes()))
+  // Decided by the data source in the SHOP timezone (server in API mode); the local fallback also uses shop time.
+  const canCancel = !!booking && (booking.canCancel ?? canCancelOnline(booking, shopNow()))
 
   return (
     <PublicLayout>
@@ -84,11 +86,14 @@ export default function ManagePage() {
             </div>
             <div className="mt-4 space-y-2.5 text-sm">
               <p className="flex items-center gap-2"><CalendarDays className="size-4 text-stone-400" />{fmtDateLong(booking.date)}</p>
-              <p className="flex items-center gap-2"><Clock className="size-4 text-stone-400" />{fmtTime(booking.start)} – {fmtTime(booking.end)}</p>
+              <p className="flex items-center gap-2"><Clock className="size-4 text-stone-400" />{fmtTime(booking.start)} – {fmtTime(booking.end)}{browserDiffersFromShop() && <span className="text-xs text-stone-400" data-testid="shop-time-hint">({shopTimeZoneCity()} time)</span>}</p>
               <p className="flex items-center gap-2"><User className="size-4 text-stone-400" />with {member.name}</p>
               <p className="pt-1 font-semibold">{usd(booking.priceUsd)} <span className="font-normal text-stone-400">· pay at the shop</span></p>
             </div>
-            {booking.status === 'confirmed' && !isPast && (
+            {booking.status === 'confirmed' && !canCancel && (
+              <p className="mt-5 border-t border-stone-100 pt-4 text-sm text-stone-500" data-testid="cancel-unavailable">This appointment has already started, so it can’t be cancelled online. Please call the shop.</p>
+            )}
+            {booking.status === 'confirmed' && canCancel && (
               <div className="mt-5 border-t border-stone-100 pt-4">
                 {confirming ? (
                   <div className="rounded-xl bg-red-50 p-4">
@@ -99,7 +104,7 @@ export default function ManagePage() {
                     </div>
                   </div>
                 ) : (
-                  <Button variant="secondary" className="w-full text-red-600" onClick={() => setConfirming(true)}><XCircle className="size-4" />Cancel booking</Button>
+                  <Button variant="secondary" className="w-full text-red-600" onClick={() => setConfirming(true)} data-testid="cancel-booking"><XCircle className="size-4" />Cancel booking</Button>
                 )}
               </div>
             )}

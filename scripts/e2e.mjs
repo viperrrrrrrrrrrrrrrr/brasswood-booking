@@ -110,6 +110,8 @@ await page.waitForTimeout(200)
 const rows = await page.$$eval('[data-testid="client-rows"] tr', (els) => els.map((e) => e.textContent))
 ok('Client created & searchable', rows.length === 1 && rows[0].includes('Jordan Ellis'))
 await page.click('[data-testid="client-rows"] tr')
+// History is fetched on demand when the client opens (no longer preloaded with every booking) — wait for it.
+await page.waitForSelector(`text=${code}`, { timeout: 5000 }).catch(() => {})
 ok('Client history contains booking', await page.isVisible(`text=${code}`))
 
 // ---------------- Cancel by code ----------------

@@ -1,4 +1,8 @@
 import type { DateStr } from './types'
+import { shopNow } from './shopTime'
+
+// Calendar dates are plain "YYYY-MM-DD" strings in the SHOP's timezone. Date arithmetic below uses UTC math so it
+// gives the same answer in every browser timezone (no DST surprises); "today"/"now" come from the shop clock.
 
 export const pad = (n: number) => String(n).padStart(2, '0')
 
@@ -11,18 +15,25 @@ export function parseDate(s: DateStr): Date {
   return new Date(y, m - 1, d)
 }
 
+function utcDate(s: DateStr): Date {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d))
+}
+const utcDateStr = (d: Date): DateStr => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
+
+/** Today's date in the shop timezone (not the browser's). */
 export function todayStr(): DateStr {
-  return toDateStr(new Date())
+  return shopNow().date
 }
 
 export function addDays(s: DateStr, n: number): DateStr {
-  const d = parseDate(s)
-  d.setDate(d.getDate() + n)
-  return toDateStr(d)
+  const d = utcDate(s)
+  d.setUTCDate(d.getUTCDate() + n)
+  return utcDateStr(d)
 }
 
 export function dayOfWeek(s: DateStr): number {
-  return parseDate(s).getDay()
+  return utcDate(s).getUTCDay()
 }
 
 /** Monday-based start of week */
@@ -31,9 +42,9 @@ export function startOfWeek(s: DateStr): DateStr {
   return addDays(s, dow === 0 ? -6 : 1 - dow)
 }
 
+/** Current minute-of-day in the shop timezone (not the browser's). */
 export function nowMinutes(): number {
-  const d = new Date()
-  return d.getHours() * 60 + d.getMinutes()
+  return shopNow().minutes
 }
 
 export function fmtTime(min: number): string {
@@ -54,7 +65,7 @@ export function parseTime24(s: string): number {
 }
 
 export function fmtDate(s: DateStr, opts: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' }): string {
-  return parseDate(s).toLocaleDateString('en-US', opts)
+  return utcDate(s).toLocaleDateString('en-US', { ...opts, timeZone: 'UTC' })
 }
 
 export function fmtDateLong(s: DateStr): string {

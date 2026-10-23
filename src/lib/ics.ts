@@ -1,8 +1,9 @@
 import type { DateStr } from './types'
-import { pad } from './date'
+import { shopTimeToUtc } from './shopTime'
 
-function stamp(date: DateStr, min: number) {
-  return `${date.replace(/-/g, '')}T${pad(Math.floor(min / 60))}${pad(min % 60)}00`
+/** Shop wall time → UTC "Z" stamp, so calendars in any timezone show the right moment. */
+export function icsStamp(date: DateStr, min: number, tz?: string) {
+  return shopTimeToUtc(date, min, tz).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
 }
 
 export function downloadIcs(opts: { uid: string; title: string; description: string; location: string; date: DateStr; start: number; end: number }) {
@@ -14,8 +15,8 @@ export function downloadIcs(opts: { uid: string; title: string; description: str
     'BEGIN:VEVENT',
     `UID:${opts.uid}@brasswood.example`,
     `DTSTAMP:${now}`,
-    `DTSTART:${stamp(opts.date, opts.start)}`,
-    `DTEND:${stamp(opts.date, opts.end)}`,
+    `DTSTART:${icsStamp(opts.date, opts.start)}`,
+    `DTEND:${icsStamp(opts.date, opts.end)}`,
     `SUMMARY:${opts.title}`,
     `DESCRIPTION:${opts.description.replace(/\n/g, '\\n')}`,
     `LOCATION:${opts.location}`,

@@ -1,70 +1,69 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Search, Mail, Phone, Users } from 'lucide-react'
 import { api } from '../../data'
-import { useCatalog, useQuery } from '../../data/hooks'
-import type { Booking, Client } from '../../lib/types'
-import { fmtDate, fmtTime, todayStr, usd } from '../../lib/date'
+import { useCatalog, useDebounced, useQuery } from '../../data/hooks'
+import type { ClientSort, ClientSummary, ClientSummaryPage } from '../../lib/types'
+import { fmtDate, fmtTime, usd } from '../../lib/date'
 import { Avatar, Button, Card, EmptyState, Field, Input, Modal, Spinner, StatusBadge, Textarea, useToast } from '../../components/ui'
 import { PageHeader } from './AdminLayout'
 
-interface Row { client: Client; visits: number; spent: number; last?: string; next?: Booking; total: number }
+const PAGE = 50
+const MAX_PER_REQUEST = 200
+
+/** Loads the first `count` rows of the server-side summary (search / sort / aggregates run in the database). */
+async function loadRows(q: string, sort: ClientSort, count: number): Promise<ClientSummaryPage> {
+  const parts: Promise<ClientSummaryPage>[] = []
+  for (let offset = 0; offset < count; offset += MAX_PER_REQUEST) parts.push(api.clients.summary({ q, sort, offset, limit: Math.min(MAX_PER_REQUEST, count - offset) }))
+  const pages = await Promise.all(parts)
+  return { total: pages[0]?.total ?? 0, rows: pages.flatMap((p) => p.rows) }
+}
+
+function quickMatch(c: { name: string; email: string; phone: string }, term: string): boolean {
+  const t = term.toLowerCase()
+  const digits = term.replace(/\D/g, '')
+  return c.name.toLowerCase().includes(t) || c.email.toLowerCase().includes(t) || (digits.length >= 3 && c.phone.replace(/\D/g, '').includes(digits))
+}
 
 export default function ClientsPage() {
-  const clients = useQuery(() => api.clients.list(), [])
-  const bookings = useQuery(() => api.bookings.list(), [])
   const [q, setQ] = useState('')
-  const [sort, setSort] = useState<'name' | 'spent' | 'last'>('last')
+  const [sort, setSort] = useState<ClientSort>('last')
+  const [count, setCount] = useState(PAGE)
   const [openId, setOpenId] = useState<string | null>(null)
-  const today = todayStr()
+  const term = useDebounced(q.trim(), 250)
+  // Visit counts/spend depend on bookings too, so refetch when either scope changes.
+  // (useQuery keeps the previous rows while a new search/sort/page loads.)
+  const page = useQuery(() => loadRows(term, sort, count), [term, sort, count], ['clients', 'bookings'])
+  const shown = page.data
 
-  const rows: Row[] = useMemo(() => {
-    const by = new Map<string, Booking[]>()
-    for (const b of bookings.data ?? []) by.set(b.clientId, [...(by.get(b.clientId) ?? []), b])
-    return (clients.data ?? []).map((c) => {
-      const list = by.get(c.id) ?? []
-      const done = list.filter((b) => b.status === 'completed')
-      return {
-        client: c,
-        visits: done.length,
-        spent: done.reduce((s, b) => s + b.priceUsd, 0),
-        last: done.map((b) => b.date).sort().at(-1),
-        next: list.filter((b) => b.status === 'confirmed' && b.date >= today).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start))[0],
-        total: list.length,
-      }
-    })
-  }, [clients.data, bookings.data, today])
-
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    const digits = s.replace(/\D/g, '')
-    const list = rows.filter(({ client: c }) => !s || c.name.toLowerCase().includes(s) || c.email.toLowerCase().includes(s) || (digits.length >= 3 && c.phone.replace(/\D/g, '').includes(digits)))
-    return list.sort((a, b) => sort === 'name' ? a.client.name.localeCompare(b.client.name) : sort === 'spent' ? b.spent - a.spent : (b.next?.date ?? b.last ?? '').localeCompare(a.next?.date ?? a.last ?? ''))
-  }, [rows, q, sort])
-
-  if (!clients.data || !bookings.data) return <Spinner />
+  if (!shown) return <Spinner />
+  // Instant feedback while the debounced server search is in flight: narrow the loaded rows locally.
+  const typed = q.trim()
+  const rows = typed && typed !== term ? shown.rows.filter((r) => quickMatch(r.client, typed)) : shown.rows
+  const open = rows.find((r) => r.client.id === openId)
   return (
     <div>
-      <PageHeader title="Clients" sub={`${clients.data.length} clients · created automatically from bookings`} />
+      <PageHeader title="Clients" sub={term ? `${shown.total} matching “${term}”` : `${shown.total} clients · created automatically from bookings`} />
       <Card>
         <div className="flex flex-wrap items-center gap-3 border-b border-stone-100 p-3 sm:p-4">
           <div className="relative min-w-0 flex-1 sm:max-w-sm">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-stone-400" />
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, email or phone" className="pl-9" data-testid="client-search" />
+            <Input value={q} onChange={(e) => { setQ(e.target.value); setCount(PAGE) }} placeholder="Search name, email or phone" className="pl-9" data-testid="client-search" />
           </div>
           <div className="flex rounded-xl bg-stone-100 p-0.5 text-xs font-medium">
             {([['last', 'Recent'], ['spent', 'Top spend'], ['name', 'A–Z']] as const).map(([k, l]) => (
-              <button key={k} onClick={() => setSort(k)} className={`rounded-[10px] px-3 py-1.5 ${sort === k ? 'bg-white shadow-sm' : 'text-stone-500'}`}>{l}</button>
+              <button key={k} onClick={() => { setSort(k); setCount(PAGE) }} className={`rounded-[10px] px-3 py-1.5 ${sort === k ? 'bg-white shadow-sm' : 'text-stone-500'}`}>{l}</button>
             ))}
           </div>
+          {page.loading && <Spinner />}
         </div>
-        {filtered.length === 0 ? <EmptyState icon={<Users className="size-8" />} title="No clients found" text="Try a different name, email or phone number." /> : (
+        {rows.length === 0 ? <EmptyState icon={<Users className="size-8" />} title="No clients found" text="Try a different name, email or phone number." /> : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-left text-xs font-medium text-stone-400">
                 <tr><th className="px-5 py-2.5">Client</th><th className="hidden px-3 md:table-cell">Contact</th><th className="px-3 text-right">Visits</th><th className="hidden px-3 text-right sm:table-cell">Spent</th><th className="hidden px-3 lg:table-cell">Last visit</th><th className="hidden px-5 lg:table-cell">Next booking</th></tr>
               </thead>
               <tbody className="divide-y divide-stone-100" data-testid="client-rows">
-                {filtered.map((r) => (
+                {rows.map((r) => (
                   <tr key={r.client.id} onClick={() => setOpenId(r.client.id)} className="cursor-pointer hover:bg-stone-50">
                     <td className="px-5 py-3"><div className="flex items-center gap-3"><Avatar name={r.client.name} size={32} color="#57534e" /><div className="min-w-0"><p className="font-medium">{r.client.name}</p><p className="truncate text-xs text-stone-400 md:hidden">{r.client.phone}</p></div></div></td>
                     <td className="hidden px-3 md:table-cell"><p>{r.client.email}</p><p className="text-xs text-stone-400">{r.client.phone}</p></td>
@@ -78,19 +77,27 @@ export default function ClientsPage() {
             </table>
           </div>
         )}
+        {rows.length < shown.total && (
+          <div className="flex items-center justify-center gap-3 border-t border-stone-100 p-3 text-sm text-stone-500">
+            <span>Showing {rows.length} of {shown.total}</span>
+            <Button size="sm" variant="secondary" loading={page.loading} onClick={() => setCount((c) => c + PAGE)} data-testid="clients-more">Show more</Button>
+          </div>
+        )}
       </Card>
-      {openId && <ClientModal row={rows.find((r) => r.client.id === openId)!} bookings={(bookings.data ?? []).filter((b) => b.clientId === openId)} onClose={() => setOpenId(null)} />}
+      {open && <ClientModal row={open} onClose={() => setOpenId(null)} />}
     </div>
   )
 }
 
-function ClientModal({ row, bookings, onClose }: { row: Row; bookings: Booking[]; onClose: () => void }) {
+function ClientModal({ row, onClose }: { row: ClientSummary; onClose: () => void }) {
   const { services, staff } = useCatalog()
   const [notes, setNotes] = useState(row.client.notes)
   const toast = useToast()
   const c = row.client
-  const sorted = [...bookings].sort((a, b) => (b.date + String(b.start).padStart(4, '0')).localeCompare(a.date + String(a.start).padStart(4, '0')))
-  const noShows = bookings.filter((b) => b.status === 'no-show').length
+  // Only this client's bookings (indexed by client_id, date) — not the whole bookings table.
+  const history = useQuery(() => api.bookings.list({ clientId: c.id }), [c.id], ['bookings'])
+  const sorted = [...(history.data ?? [])].sort((a, b) => (b.date + String(b.start).padStart(4, '0')).localeCompare(a.date + String(a.start).padStart(4, '0')))
+  const noShows = row.noShows
   return (
     <Modal open onClose={onClose} title="Client" wide>
       <div className="flex flex-wrap items-center gap-4">
@@ -113,7 +120,7 @@ function ClientModal({ row, bookings, onClose }: { row: Row; bookings: Booking[]
       </Field>
       {notes !== c.notes && <Button size="sm" className="mt-2" onClick={async () => { await api.clients.update(c.id, { notes }); toast('Notes saved') }}>Save notes</Button>}
       <h3 className="mt-6 mb-2 text-sm font-semibold">Booking history</h3>
-      {sorted.length === 0 ? <p className="text-sm text-stone-500">No bookings yet.</p> : (
+      {!history.data ? <Spinner /> : sorted.length === 0 ? <p className="text-sm text-stone-500">No bookings yet.</p> : (
         <ul className="divide-y divide-stone-100 rounded-xl ring-1 ring-stone-200">
           {sorted.map((b) => {
             const m = staff.find((s) => s.id === b.staffId)

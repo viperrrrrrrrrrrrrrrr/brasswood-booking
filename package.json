@@ -20,6 +20,8 @@
     "e2e": "node scripts/e2e.mjs",
     "e2e:history": "node scripts/e2e-history.mjs",
     "e2e:api": "node scripts/e2e-api.mjs",
+    "e2e:tz": "node scripts/e2e-tz.mjs",
+    "test:unit": "node scripts/unit-shop-time.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
     "remote:set-db-id": "node scripts/remote-config.mjs set-db-id",
     "remote:check": "node scripts/remote-config.mjs check",

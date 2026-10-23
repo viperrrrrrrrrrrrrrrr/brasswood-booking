@@ -8,8 +8,8 @@ export interface AvailabilityContext {
   timeOff: TimeOff[]
   settings: BusinessSettings
   /**
-   * "Now" in the shop's timezone. The browser demo omits it (uses the device clock);
-   * the server passes it explicitly because Workers run in UTC.
+   * "Now" in the shop's timezone (shopNow(settings.timezone)). Both the server and the demo data source pass it;
+   * the fallback (todayStr/nowMinutes) is also shop time, never the device's local time.
    */
   now?: { date: DateStr; minutes: number }
 }

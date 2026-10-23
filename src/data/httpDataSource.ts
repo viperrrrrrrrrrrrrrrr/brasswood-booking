@@ -1,8 +1,11 @@
-import type { Booking, BookingStatus, BusinessSettings, Client, ID, NewBookingInput, RescheduleInput, Service, Slot, StaffMember, TimeOff } from '../lib/types'
+import type { Booking, BookingStatus, BusinessSettings, Client, ClientSummaryPage, ClientSummaryQuery, ID, NewBookingInput, RescheduleInput, Service, Slot, StaffMember, TimeOff } from '../lib/types'
 import type { AvailabilityQuery, NextAvailable } from '../lib/availability'
-import { BookingConflictError, NotFoundError, UnauthorizedError, type BookingFilter, type CrudRepository, type DataSource } from './repository'
+import { setShopTimeZone } from '../lib/shopTime'
+import { BookingConflictError, NotFoundError, UnauthorizedError, ALL_SCOPES, type BookingFilter, type ClientFilter, type CrudRepository, type DataSource, type DataScope } from './repository'
 
-const POLL_MS = 20_000
+/** Poll timing. `localStorage['brasswood:pollMs']` (>=100) overrides the base interval — used by the e2e polling tests. */
+const DEFAULT_POLL_MS = 20_000
+type Versions = Partial<Record<DataScope, number>>
 
 /** API error with the server's message (validation, rate limit, …). */
 export class ApiError extends Error {
@@ -19,28 +22,52 @@ export class ApiError extends Error {
 /**
  * Talks to the Cloudflare Pages Functions in /functions (D1 database).
  * Same-origin requests with the HttpOnly admin session cookie; no secrets in the browser.
- * Change notifications: emitted after our own mutations, broadcast to other tabs, and a light
- * poll (every 20 s while the tab is visible) picks up changes made from other devices.
+ *
+ * Change detection (cheap on D1): instead of re-reading every list on a timer, the tab polls a single-row version
+ * counter (GET /api/admin/changes on admin pages, /api/changes elsewhere — 1 row read) and only re-runs the queries
+ * whose scope (catalog / bookings / clients) actually changed.
+ *   - every 20 s while the user is active; after 5 min without interaction the interval doubles up to 60 s;
+ *   - no polling at all while the tab is hidden; an immediate check when it becomes visible / gets focus;
+ *   - our own mutations and other tabs (BroadcastChannel) trigger an immediate check.
  */
 export class HttpDataSource implements DataSource {
-  private listeners = new Set<() => void>()
-  private timer: ReturnType<typeof setInterval> | undefined
+  private subs = new Set<{ listener: () => void; scopes: Set<DataScope> }>()
+  private timer: ReturnType<typeof setTimeout> | undefined
   private channel: BroadcastChannel | undefined
   private readonly base: string
+  private readonly baseMs: number
+  private readonly maxMs: number
+  private readonly idleAfterMs: number
+  private intervalMs: number
+  private lastActivity = performance.now()
+  private lastCheck = 0
+  private versions: Versions | undefined
+  private checking: Promise<void> | undefined
+  private inflight = new Map<string, Promise<unknown>>()
 
   constructor(base = '/api') {
     this.base = base.replace(/\/$/, '')
+    let override = 0
+    try { override = Number(globalThis.localStorage?.getItem('brasswood:pollMs')) || 0 } catch { /* storage blocked */ }
+    this.baseMs = override >= 100 ? override : DEFAULT_POLL_MS
+    this.maxMs = this.baseMs * 3
+    this.idleAfterMs = this.baseMs * 15
+    this.intervalMs = this.baseMs
     if (typeof window !== 'undefined') {
       if ('BroadcastChannel' in window) {
         this.channel = new BroadcastChannel('brasswood-api')
-        this.channel.onmessage = () => this.notify()
+        this.channel.onmessage = () => void this.check(true)
       }
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && this.listeners.size) this.notify()
-        this.syncPolling()
+        if (this.visible()) this.onActivity(true)
+        else this.schedule()
       })
+      window.addEventListener('focus', () => this.onActivity(true))
+      for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const) window.addEventListener(ev, () => this.onActivity(false), { passive: true })
     }
   }
+
+  private visible = () => typeof document === 'undefined' || document.visibilityState === 'visible'
 
   readonly canResetDemoData = false
   async resetDemoData() {
@@ -67,7 +94,14 @@ export class HttpDataSource implements DataSource {
     }
     throw new ApiError(res.status, data?.error?.code ?? 'error', msg)
   }
-  private get = <T,>(path: string) => this.req<T>('GET', path)
+  /** Identical concurrent GETs (e.g. several components refetching the catalog) share one request. */
+  private get<T>(path: string): Promise<T> {
+    const hit = this.inflight.get(path)
+    if (hit) return hit as Promise<T>
+    const p = this.req<T>('GET', path).finally(() => this.inflight.delete(path))
+    this.inflight.set(path, p)
+    return p
+  }
   private async getOrUndefined<T>(path: string): Promise<T | undefined> {
     try {
       return await this.get<T>(path)
@@ -76,32 +110,98 @@ export class HttpDataSource implements DataSource {
       throw e
     }
   }
-  /** Mutations notify this tab and others. */
+  /** Mutations: immediate version check here (refetches only what moved), and a nudge to other tabs. */
   private async mutate<T>(method: string, path: string, body?: unknown): Promise<T> {
     const out = await this.req<T>(method, path, body ?? (method === 'DELETE' ? undefined : {}))
-    this.notify()
+    this.check(true).catch(() => this.notify(ALL_SCOPES))
     this.channel?.postMessage('changed')
     return out
   }
 
-  // ---------- change notifications ----------
-  private notify() {
-    this.listeners.forEach((l) => l())
+  // ---------- change detection ----------
+  private notify(scopes: readonly DataScope[]) {
+    this.subs.forEach((s) => { if (scopes.some((x) => s.scopes.has(x))) s.listener() })
   }
-  private syncPolling() {
-    const want = this.listeners.size > 0 && (typeof document === 'undefined' || document.visibilityState === 'visible')
-    if (want && !this.timer) this.timer = setInterval(() => this.notify(), POLL_MS)
-    if (!want && this.timer) {
-      clearInterval(this.timer)
-      this.timer = undefined
+
+  private async fetchVersions(): Promise<Versions> {
+    const path = typeof location !== 'undefined' ? location.pathname : ''
+    const admin = path.startsWith('/admin') && !path.startsWith('/admin/login')
+    const opts: RequestInit = { credentials: 'same-origin', headers: { accept: 'application/json' }, cache: 'no-store' }
+    if (admin) {
+      const r = await fetch(`${this.base}/admin/changes`, opts)
+      if (r.ok) return r.json()
+      if (r.status !== 401) throw new Error(`changes: ${r.status}`)
+      // signed out: fall back to the public counters (the page's own queries handle the 401 redirect)
     }
+    const r = await fetch(`${this.base}/changes`, opts)
+    if (!r.ok) throw new Error(`changes: ${r.status}`)
+    return r.json()
   }
-  subscribe(listener: () => void) {
-    this.listeners.add(listener)
-    this.syncPolling()
+
+  /** One version check (1 D1 row). `force` = run after any in-flight check, so a just-committed write is seen. */
+  check(force = false): Promise<void> {
+    if (this.checking && !force) return this.checking
+    const prev = this.checking ?? Promise.resolve()
+    const run = prev.catch(() => {}).then(async () => {
+      this.lastCheck = performance.now()
+      const next = await this.fetchVersions()
+      const changed: DataScope[] = []
+      const known = this.versions ?? {}
+      const merged: Versions = { ...known }
+      for (const k of ALL_SCOPES) {
+        const v = next[k]
+        if (typeof v !== 'number') continue
+        if (known[k] === undefined) merged[k] = v
+        else if (v > known[k]!) { merged[k] = v; changed.push(k) }
+      }
+      this.versions = merged
+      if (changed.length) {
+        this.intervalMs = this.baseMs
+        this.notify(changed)
+      }
+      return changed.length > 0
+    })
+    const done = run.then(() => undefined)
+    this.checking = done
+    const clear = () => { if (this.checking === done) this.checking = undefined }
+    done.then(clear, clear)
+    return run.then((changed) => {
+      if (!changed && performance.now() - this.lastActivity > this.idleAfterMs) this.intervalMs = Math.min(this.intervalMs * 2, this.maxMs)
+    })
+  }
+
+  private onActivity(checkNow: boolean) {
+    this.lastActivity = performance.now()
+    const wasBackedOff = this.intervalMs > this.baseMs
+    this.intervalMs = this.baseMs
+    if (checkNow && this.subs.size && this.visible() && performance.now() - this.lastCheck > 1000) {
+      this.check().catch(() => {}).finally(() => this.schedule())
+    } else if (wasBackedOff || !this.timer) this.schedule()
+  }
+
+  private schedule() {
+    clearTimeout(this.timer)
+    this.timer = undefined
+    if (!this.subs.size || !this.visible()) return
+    this.timer = setTimeout(() => {
+      this.timer = undefined
+      this.check().catch(() => {}).finally(() => this.schedule())
+    }, this.intervalMs)
+  }
+
+  subscribe(listener: () => void, scopes: readonly DataScope[] = ALL_SCOPES) {
+    const sub = { listener, scopes: new Set(scopes) }
+    const first = this.subs.size === 0
+    this.subs.add(sub)
+    if (first) {
+      // (re)baseline the counters; the subscribing queries fetch fresh data themselves
+      this.versions = undefined
+      if (this.visible()) this.check().catch(() => {})
+      this.schedule()
+    }
     return () => {
-      this.listeners.delete(listener)
-      this.syncPolling()
+      this.subs.delete(sub)
+      if (!this.subs.size) this.schedule()
     }
   }
 
@@ -123,13 +223,24 @@ export class HttpDataSource implements DataSource {
   timeOff = this.crud<TimeOff>(null, '/time-off')
 
   clients = {
-    list: () => this.get<Client[]>('/admin/clients'),
+    list: (f: ClientFilter = {}) => {
+      const p = new URLSearchParams()
+      if (f.q) p.set('q', f.q)
+      if (f.limit) p.set('limit', String(f.limit))
+      const qs = p.toString()
+      return this.get<Client[]>(`/admin/clients${qs ? `?${qs}` : ''}`)
+    },
+    summary: (q: ClientSummaryQuery = {}) => {
+      const p = new URLSearchParams({ sort: q.sort ?? 'last', limit: String(q.limit ?? 50), offset: String(q.offset ?? 0) })
+      if (q.q) p.set('q', q.q)
+      return this.get<ClientSummaryPage>(`/admin/clients/summary?${p}`)
+    },
     get: (id: ID) => this.getOrUndefined<Client>(`/admin/clients/${encodeURIComponent(id)}`),
     update: (id: ID, patch: Partial<Omit<Client, 'id'>>) => this.mutate<Client>('PUT', `/admin/clients/${encodeURIComponent(id)}`, patch),
   }
 
   settings = {
-    get: () => this.get<BusinessSettings>('/settings'),
+    get: () => this.get<BusinessSettings>('/settings').then((st) => (setShopTimeZone(st.timezone), st)),
     update: (patch: Partial<BusinessSettings>) => this.mutate<BusinessSettings>('PUT', '/admin/settings', patch),
   }
 
@@ -154,6 +265,8 @@ export class HttpDataSource implements DataSource {
       if (f.staffId) p.set('staffId', f.staffId)
       if (f.clientId) p.set('clientId', f.clientId)
       if (f.status) p.set('status', f.status.join(','))
+      if (f.withClient) p.set('withClient', '1')
+      if (f.limit) p.set('limit', String(f.limit))
       const qs = p.toString()
       return this.get<Booking[]>(`/admin/bookings${qs ? `?${qs}` : ''}`)
     },

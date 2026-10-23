@@ -9,4 +9,6 @@ export interface Env {
   ADMIN_PASSWORD?: string
   /** Optional PBKDF2 hash: "pbkdf2-sha256$<iterations>$<saltB64>$<hashB64>" (npm run hash-password). Takes precedence. */
   ADMIN_PASSWORD_HASH?: string
+  /** Local e2e only (`--binding TEST_CLOCK=1`): honour the x-test-now header. Never set in wrangler.toml. */
+  TEST_CLOCK?: string
 }

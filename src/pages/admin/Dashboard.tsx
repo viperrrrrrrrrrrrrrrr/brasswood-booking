@@ -2,28 +2,27 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { CalendarCheck, CalendarClock, DollarSign, UserX, ArrowUpRight, ArrowDownRight, Check, Plus } from 'lucide-react'
 import { api } from '../../data'
-import { useCatalog, useQuery } from '../../data/hooks'
-import type { Booking, Client, StaffMember } from '../../lib/types'
-import { addDays, dayOfWeek, fmtDate, fmtDateLong, fmtTime, nowMinutes, todayStr, usd } from '../../lib/date'
+import { useCatalog, useQuery, useShopClock } from '../../data/hooks'
+import type { Booking, StaffMember } from '../../lib/types'
+import { addDays, dayOfWeek, fmtDate, fmtDateLong, fmtTime, todayStr, usd } from '../../lib/date'
 import { Avatar, Button, Card, EmptyState, Spinner, StatusBadge, cn, useToast } from '../../components/ui'
 import { BookingDetailsModal, BookingFormModal } from '../../components/BookingModals'
 import { PageHeader } from './AdminLayout'
 
 export default function Dashboard() {
-  const today = todayStr()
+  const { date: today, minutes: nowMin } = useShopClock() // shop timezone, not the browser's
   const { services, staff, ready } = useCatalog()
   const toast = useToast()
   const [openId, setOpenId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const bookings = useQuery(() => api.bookings.list({ from: addDays(today, -27), to: addDays(today, 13) }), [today])
-  const clients = useQuery(() => api.clients.list(), [])
-  const clientMap = useMemo(() => new Map((clients.data ?? []).map((c) => [c.id, c])), [clients.data])
+  // Client names come joined in (withClient) — no need to load every client.
+  const bookings = useQuery(() => api.bookings.list({ from: addDays(today, -27), to: addDays(today, 13), withClient: true }), [today], ['bookings', 'clients'])
 
   const stats = useMemo(() => {
     const all = bookings.data ?? []
     const inRange = (from: string, to: string) => all.filter((b) => b.date >= from && b.date <= to)
     const todays = all.filter((b) => b.date === today && b.status !== 'cancelled')
-    const upcoming = all.filter((b) => b.status === 'confirmed' && (b.date > today || (b.date === today && b.start > nowMinutes())) && b.date <= addDays(today, 7))
+    const upcoming = all.filter((b) => b.status === 'confirmed' && (b.date > today || (b.date === today && b.start > nowMin)) && b.date <= addDays(today, 7))
     const rev = (list: Booking[]) => list.filter((b) => b.status === 'completed').reduce((s, b) => s + b.priceUsd, 0)
     const last7 = rev(inRange(addDays(today, -6), today))
     const prev7 = rev(inRange(addDays(today, -13), addDays(today, -7)))
@@ -40,7 +39,7 @@ export default function Dashboard() {
     inRange(addDays(today, -27), today).filter((b) => b.status === 'completed').forEach((b) => counts.set(b.serviceId, (counts.get(b.serviceId) ?? 0) + 1))
     const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
     return { todays, upcoming, last7, prev7, noShow, chart, top, todayRevenue: todays.filter((b) => b.status !== 'no-show').reduce((s, b) => s + b.priceUsd, 0) }
-  }, [bookings.data, today])
+  }, [bookings.data, today, nowMin])
 
   if (!ready || !bookings.data) return <div className="flex h-64 items-center justify-center"><Spinner /></div>
   const change = stats.prev7 ? (stats.last7 - stats.prev7) / stats.prev7 : 0
@@ -94,13 +93,12 @@ export default function Dashboard() {
           <ul className="divide-y divide-stone-100" data-testid="today-list">
             {stats.todays.map((b) => {
               const m = staff.find((s) => s.id === b.staffId)
-              const c = clientMap.get(b.clientId) as Client | undefined
               return (
                 <li key={b.id} className="flex cursor-pointer items-center gap-3 px-5 py-3 hover:bg-stone-50" onClick={() => setOpenId(b.id)}>
                   <span className="w-20 shrink-0 text-sm font-semibold tabular-nums">{fmtTime(b.start)}</span>
                   <span className="h-8 w-1 shrink-0 rounded-full" style={{ background: m?.color }} />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{c?.name}</p>
+                    <p className="truncate text-sm font-medium">{b.clientName}</p>
                     <p className="truncate text-xs text-stone-500">{svcName(b.serviceId)} · {m?.name}</p>
                   </div>
                   <span className="hidden sm:inline"><StatusBadge status={b.status} /></span>

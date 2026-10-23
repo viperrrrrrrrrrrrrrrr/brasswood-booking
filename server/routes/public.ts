@@ -7,6 +7,8 @@ import { availabilityCtx, loadCatalog, shopNow } from '../repo'
 import { cancelByCode, createBooking, findByCode, publicBooking } from '../bookings'
 import { assertNotRateLimited, assertSameOrigin, clientIp, createSession, deleteSession, getSession, recordFailure, sessionCookie, sleep, verifyCredentials } from '../auth'
 import { id as vId, int, isDate, obj, str } from '../validate'
+import { serverNow, testClockEnabled } from '../clock'
+import { readVersions } from '../versions'
 
 const q = (c: RouteCtx, k: string) => c.url.searchParams.get(k) ?? ''
 const staffParam = (v: string) => (v === 'any' ? 'any' : vId(v, 'staffId'))
@@ -19,11 +21,18 @@ export const publicRouter = new Router()
   /** Liveness + D1 binding/schema/seed check (2 tiny reads). Used by docs/REMOTE_TEST.md and scripts/verify-remote.mjs. */
   .get('/health', async ({ env }) => {
     try {
-      const r = await env.DB.prepare('SELECT (SELECT count(*) FROM settings) AS settings, (SELECT count(*) FROM services) AS services').first<{ settings: number; services: number }>()
-      return json({ ok: true, db: 'ok', seeded: (r?.settings ?? 0) > 0 && (r?.services ?? 0) > 0 })
+      // data_versions comes from migration 0002 — if it is missing the query fails → 503 "apply migrations".
+      const r = await env.DB.prepare('SELECT (SELECT count(*) FROM settings) AS settings, (SELECT count(*) FROM services) AS services, (SELECT count(*) FROM data_versions) AS versions').first<{ settings: number; services: number; versions: number }>()
+      return json({ ok: true, db: 'ok', seeded: (r?.settings ?? 0) > 0 && (r?.services ?? 0) > 0, schema: (r?.versions ?? 0) > 0 ? 2 : 1, ...(testClockEnabled(env) ? { testClock: true } : {}) })
     } catch {
       return json({ ok: false, db: 'error', message: 'D1 is bound but the schema is missing — apply migrations' }, 503)
     }
+  })
+
+  /** Cheap change check for the public booking page (1 row read). Clients' version is admin-only. */
+  .get('/changes', async ({ env }) => {
+    const v = await readVersions(env.DB)
+    return json({ catalog: v.catalog, bookings: v.bookings }, 200, { 'cache-control': 'no-store' })
   })
 
   .get('/services', async ({ env }) => json((await loadCatalog(env.DB)).services))
@@ -65,7 +74,7 @@ export const publicRouter = new Router()
     const serviceId = vId(q(c, 'serviceId'), 'serviceId')
     const staffIds = q(c, 'staffIds').split(',').filter(Boolean).map(staffParam).slice(0, 20)
     const cat = await loadCatalog(c.env.DB)
-    const today = shopNow(cat.settings.timezone).date
+    const today = shopNow(cat.settings.timezone, serverNow()).date
     const ctx = await availabilityCtx(c.env.DB, today, addDays(today, cat.settings.horizonDays + 1), cat)
     return json(nextAvailable(ctx, serviceId, staffIds))
   })
@@ -89,13 +98,14 @@ export const publicRouter = new Router()
     return json(publicBooking(booking), 201)
   })
   .get('/bookings/by-code/:code', async (c) => {
-    const b = await findByCode(c.env.DB, c.params.code)
-    if (!b) throw notFound('No booking with that code')
-    return json(publicBooking(b))
+    const found = await findByCode(c.env.DB, c.params.code)
+    if (!found) throw notFound('No booking with that code')
+    return json(publicBooking(found.booking, found.timeZone))
   })
   .post('/bookings/by-code/:code/cancel', async (c) => {
     assertSameOrigin(c.req)
-    return json(publicBooking(await cancelByCode(c.env.DB, c.params.code)))
+    const done = await cancelByCode(c.env.DB, c.params.code)
+    return json(publicBooking(done.booking, done.timeZone))
   })
 
   // ---------- auth ----------

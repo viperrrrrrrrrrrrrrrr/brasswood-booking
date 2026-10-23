@@ -1,5 +1,5 @@
 import type {
-  Booking, BookingStatus, BusinessSettings, Client, DateStr, ID, NewBookingInput, RescheduleInput,
+  Booking, BookingStatus, BusinessSettings, Client, ClientSummaryPage, ClientSummaryQuery, DateStr, ID, NewBookingInput, RescheduleInput,
   Service, Slot, StaffMember, TimeOff,
 } from '../lib/types'
 import type { AvailabilityQuery, NextAvailable } from '../lib/availability'
@@ -23,7 +23,20 @@ export interface BookingFilter {
   staffId?: ID
   clientId?: ID
   status?: BookingStatus[]
+  /** Join the client's name/phone into each booking (clientName/clientPhone) — no separate clients.list(). */
+  withClient?: boolean
+  limit?: number
 }
+
+export interface ClientFilter {
+  /** name / email contains, or phone digits contain (3+ digits) */
+  q?: string
+  limit?: number
+}
+
+/** What a change notification is about: catalog = services/staff/hours/days off/settings. */
+export type DataScope = 'catalog' | 'bookings' | 'clients'
+export const ALL_SCOPES: readonly DataScope[] = ['catalog', 'bookings', 'clients']
 
 export interface BookingRepository {
   list(filter?: BookingFilter): Promise<Booking[]>
@@ -38,7 +51,9 @@ export interface BookingRepository {
 }
 
 export interface ClientRepository {
-  list(): Promise<Client[]>
+  list(filter?: ClientFilter): Promise<Client[]>
+  /** Paginated Clients table with visit/spend aggregates (computed by the data source, SQL in API mode). */
+  summary(q?: ClientSummaryQuery): Promise<ClientSummaryPage>
   get(id: ID): Promise<Client | undefined>
   update(id: ID, patch: Partial<Omit<Client, 'id'>>): Promise<Client>
 }
@@ -59,8 +74,8 @@ export interface DataSource {
   bookings: BookingRepository
   availability: AvailabilityService
   settings: { get(): Promise<BusinessSettings>; update(patch: Partial<BusinessSettings>): Promise<BusinessSettings> }
-  /** Notifies on any data change (including from other tabs). Returns unsubscribe. */
-  subscribe(listener: () => void): () => void
+  /** Notifies when data in one of `scopes` (default: all) changed, including from other tabs/devices. Returns unsubscribe. */
+  subscribe(listener: () => void, scopes?: readonly DataScope[]): () => void
   /** Only the browser demo can reset its data; false for the server API. */
   readonly canResetDemoData: boolean
   resetDemoData(): Promise<void>

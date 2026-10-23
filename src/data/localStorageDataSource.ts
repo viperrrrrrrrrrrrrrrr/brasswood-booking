@@ -1,6 +1,7 @@
-import type { Booking, Client, ID, NewBookingInput, RescheduleInput, BookingStatus } from '../lib/types'
+import type { Booking, Client, ClientSummary, ClientSummaryPage, ClientSummaryQuery, ID, NewBookingInput, RescheduleInput, BookingStatus } from '../lib/types'
+import { canCancelOnline, setShopTimeZone, shopNow } from '../lib/shopTime'
 import { getSlots, isStaffFree, nextAvailable, openDates, pickStaff, type AvailabilityContext } from '../lib/availability'
-import { BookingConflictError, NotFoundError, type BookingFilter, type CrudRepository, type DataSource } from './repository'
+import { BookingConflictError, NotFoundError, type BookingFilter, type ClientFilter, type CrudRepository, type DataSource } from './repository'
 import { createSeed, DB_VERSION, makeCode, makeId, type DbState } from './seed'
 
 type CollectionKey = 'services' | 'staff' | 'timeOff'
@@ -22,6 +23,7 @@ export class LocalStorageDataSource implements DataSource {
     this.key = key
     this.latencyMs = latencyMs
     this.state = this.load()
+    setShopTimeZone(this.state.settings.timezone)
     if (typeof window !== 'undefined') {
       window.addEventListener('storage', (e) => {
         if (e.key === this.key) {
@@ -58,7 +60,8 @@ export class LocalStorageDataSource implements DataSource {
 
   private ctx(): AvailabilityContext {
     const { services, staff, bookings, timeOff, settings } = this.state
-    return { services, staff, bookings, timeOff, settings }
+    // "now" in the shop timezone — same rule as the server, whatever the browser's timezone is
+    return { services, staff, bookings, timeOff, settings, now: shopNow(settings.timezone) }
   }
 
   subscribe(listener: () => void) {
@@ -113,7 +116,30 @@ export class LocalStorageDataSource implements DataSource {
   timeOff = this.crud('timeOff', 'off')
 
   clients = {
-    list: async () => clone(this.state.clients),
+    list: async (f: ClientFilter = {}) => {
+      const list = [...this.state.clients].filter((c) => matchesClient(c, f.q)).sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }))
+      return clone(f.limit ? list.slice(0, f.limit) : list)
+    },
+    summary: async (q: ClientSummaryQuery = {}): Promise<ClientSummaryPage> => {
+      const today = shopNow(this.state.settings.timezone).date
+      const by = new Map<string, Booking[]>()
+      for (const b of this.state.bookings) by.set(b.clientId, [...(by.get(b.clientId) ?? []), b])
+      const rows: ClientSummary[] = this.state.clients.filter((c) => matchesClient(c, q.q)).map((c) => {
+        const list = by.get(c.id) ?? []
+        const done = list.filter((b) => b.status === 'completed')
+        const next = list.filter((b) => b.status === 'confirmed' && b.date >= today).sort((a, b) => a.date.localeCompare(b.date) || a.start - b.start)[0]
+        const last = done.map((b) => b.date).sort().at(-1)
+        return {
+          client: clone(c), visits: done.length, spent: done.reduce((s, b) => s + b.priceUsd, 0), noShows: list.filter((b) => b.status === 'no-show').length,
+          ...(last ? { last } : {}), ...(next ? { next: { date: next.date, start: next.start } } : {}), total: list.length,
+        }
+      })
+      const byName = (a: ClientSummary, b: ClientSummary) => a.client.name.localeCompare(b.client.name, 'en', { sensitivity: 'base' })
+      const sort = q.sort ?? 'last'
+      rows.sort((a, b) => sort === 'name' ? byName(a, b) : sort === 'spent' ? b.spent - a.spent || byName(a, b) : (b.next?.date ?? b.last ?? '').localeCompare(a.next?.date ?? a.last ?? '') || byName(a, b))
+      const offset = q.offset ?? 0
+      return { total: rows.length, rows: rows.slice(offset, offset + (q.limit ?? 50)) }
+    },
     get: async (id: ID) => clone(this.state.clients.find((c) => c.id === id)),
     update: async (id: ID, patch: Partial<Omit<Client, 'id'>>) => {
       const c = this.state.clients.find((x) => x.id === id)
@@ -125,9 +151,10 @@ export class LocalStorageDataSource implements DataSource {
   }
 
   settings = {
-    get: async () => clone(this.state.settings),
+    get: async () => (setShopTimeZone(this.state.settings.timezone), clone(this.state.settings)),
     update: async (patch: Partial<DbState['settings']>) => {
       this.state.settings = { ...this.state.settings, ...patch }
+      setShopTimeZone(this.state.settings.timezone)
       this.commit()
       return clone(this.state.settings)
     },
@@ -163,8 +190,8 @@ export class LocalStorageDataSource implements DataSource {
   }
 
   bookings = {
-    list: async (f: BookingFilter = {}) =>
-      clone(
+    list: async (f: BookingFilter = {}) => {
+      const out = clone(
         this.state.bookings
           .filter(
             (b) =>
@@ -175,12 +202,17 @@ export class LocalStorageDataSource implements DataSource {
               (!f.status || f.status.includes(b.status)),
           )
           .sort((a, b) => (a.date === b.date ? a.start - b.start : a.date < b.date ? -1 : 1)),
-      ),
+      ).slice(0, f.limit || undefined)
+      if (!f.withClient) return out
+      const byId = new Map(this.state.clients.map((c) => [c.id, c]))
+      return out.map((b) => ({ ...b, clientName: byId.get(b.clientId)?.name ?? '', clientPhone: byId.get(b.clientId)?.phone ?? '' }))
+    },
     get: async (id: ID) => clone(this.state.bookings.find((b) => b.id === id)),
     findByCode: async (code: string) => {
       await sleep(this.latencyMs)
       const norm = code.trim().toUpperCase().replace(/^BW-?/, '')
-      return clone(this.state.bookings.find((b) => b.code.replace(/^BW-/, '') === norm))
+      const b = this.state.bookings.find((x) => x.code.replace(/^BW-/, '') === norm)
+      return b ? { ...clone(b), canCancel: canCancelOnline(b, shopNow(this.state.settings.timezone)) } : undefined
     },
     create: async (input: NewBookingInput) => {
       await sleep(this.latencyMs * 3)
@@ -212,7 +244,7 @@ export class LocalStorageDataSource implements DataSource {
       }
       this.state.bookings.push(booking)
       this.commit()
-      return clone(booking)
+      return { ...clone(booking), canCancel: canCancelOnline(booking, shopNow(this.state.settings.timezone)) }
     },
     setStatus: async (id: ID, status: BookingStatus) => {
       const b = this.findBooking(id)
@@ -240,6 +272,7 @@ export class LocalStorageDataSource implements DataSource {
       if (!found) throw new NotFoundError('No booking with that code')
       const b = this.findBooking(found.id)
       if (b.status !== 'confirmed') throw new Error(`This booking is already ${b.status}.`)
+      if (!canCancelOnline(b, shopNow(this.state.settings.timezone))) throw new BookingConflictError('Past appointments can’t be cancelled online.')
       b.status = 'cancelled'
       this.commit()
       return clone(b)
@@ -249,4 +282,11 @@ export class LocalStorageDataSource implements DataSource {
       this.commit()
     },
   }
+}
+
+function matchesClient(c: Client, q?: string) {
+  const s = (q ?? '').trim().toLowerCase()
+  if (!s) return true
+  const digits = s.replace(/\D/g, '')
+  return c.name.toLowerCase().includes(s) || c.email.toLowerCase().includes(s) || (digits.length >= 3 && c.phone.replace(/\D/g, '').includes(digits))
 }

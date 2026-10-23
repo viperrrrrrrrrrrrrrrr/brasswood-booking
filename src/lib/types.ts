@@ -1,6 +1,6 @@
 export type ID = string
 
-/** Calendar date in local time, formatted YYYY-MM-DD. */
+/** Calendar date in the SHOP's timezone (settings.timezone), formatted YYYY-MM-DD. */
 export type DateStr = string
 
 export interface Service {
@@ -69,7 +69,26 @@ export interface Booking {
   notes: string
   source: 'online' | 'admin'
   createdAt: string
+  /** Admin lists with `withClient`: the client's name/phone joined in (saves loading every client). */
+  clientName?: string
+  clientPhone?: string
+  /** Public lookups: may the client still cancel online? Computed in the SHOP timezone by the data source. */
+  canCancel?: boolean
 }
+
+/** One row of the admin Clients table — aggregates are computed by the data source (SQL in API mode). */
+export interface ClientSummary {
+  client: Client
+  visits: number
+  spent: number
+  noShows: number
+  last?: DateStr
+  next?: { date: DateStr; start: number }
+  total: number
+}
+export type ClientSort = 'name' | 'spent' | 'last'
+export interface ClientSummaryQuery { q?: string; sort?: ClientSort; limit?: number; offset?: number }
+export interface ClientSummaryPage { total: number; rows: ClientSummary[] }
 
 export interface BusinessSettings {
   name: string

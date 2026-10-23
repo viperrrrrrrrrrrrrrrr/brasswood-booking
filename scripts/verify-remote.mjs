@@ -96,6 +96,8 @@ try {
     const anon = context('anon')
     const h = await anon.call('/api/health')
     if (!ok('/api/health → ok, D1 bound, schema + seed present', h.status === 200 && h.data?.ok === true && h.data?.db === 'ok' && h.data?.seeded === true, `${h.status} ${h.text.slice(0, 160)}`)) throw new Error('health failed — stop (binding/migrations/seed?)')
+    ok('Schema 2 (migration 0002_data_versions applied)', h.data?.schema === 2, `schema=${h.data?.schema}`)
+    ok('TEST_CLOCK is NOT enabled (x-test-now headers are ignored)', h.data?.testClock !== true)
 
     section('Admin authentication')
     for (const p of ['/api/admin/bookings', '/api/admin/clients']) {
@@ -138,6 +140,7 @@ try {
 
     section('Context A (public visitor) books → context B (fresh admin session) sees it')
     const A = context('A')
+    const vBefore = (await admin.call('/api/admin/changes')).data
     const bookA = await A.call('/api/bookings', { method: 'POST', body: { serviceId: svc.id, staffId: stf.id, date, start: s1.start, client: { name: NAME, phone: PHONE, email: email('a') }, notes: 'automated verify-remote test' } })
     if (bookA.status === 201) created.bookings.set(bookA.data.id, 'A')
     ok('Public POST /api/bookings (context A, no cookie) → 201', bookA.status === 201, `${bookA.status} ${bookA.data?.code ?? bookA.text.slice(0, 120)} ${date} ${fmt(s1.start)}`)
@@ -156,6 +159,9 @@ try {
     ok(`Slot ${fmt(s1.start)} is now shown as taken (gone from public slots)`, !after.some((x) => x.start < s1.end && x.end > s1.start))
     const byCode = await A.call(`/api/bookings/by-code/${bookA.data.code}`)
     ok('Context A finds the booking by its code', byCode.status === 200 && byCode.data?.id === bookA.data.id)
+    const vAfter = (await B.call('/api/admin/changes')).data
+    ok('Change counter (GET /api/admin/changes) bumped by the booking', typeof vBefore?.bookings === 'number' && vAfter?.bookings > vBefore.bookings, `bookings ${vBefore?.bookings} → ${vAfter?.bookings}`)
+    ok('Public by-code returns canCancel (shop timezone)', typeof byCode.data?.canCancel === 'boolean')
 
     section('10 parallel creates on one slot')
     const race = await Promise.all(Array.from({ length: 10 }, (_, i) => context('race' + i).call('/api/bookings', {

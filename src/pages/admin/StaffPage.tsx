@@ -13,9 +13,9 @@ type Draft = Omit<StaffMember, 'id'> & { id?: string }
 const defaultHours = () => Array.from({ length: 7 }, (_, d) => (d === 0 ? null : { start: 540, end: 1080, breakStart: 780, breakEnd: 810 }))
 
 export default function StaffPage() {
-  const staff = useQuery(() => api.staff.list(), [])
-  const services = useQuery(() => api.services.list(), [])
-  const bookings = useQuery(() => api.bookings.list({ from: todayStr(), status: ['confirmed'] }), [])
+  const staff = useQuery(() => api.staff.list(), [], ['catalog'])
+  const services = useQuery(() => api.services.list(), [], ['catalog'])
+  const bookings = useQuery(() => api.bookings.list({ from: todayStr(), status: ['confirmed'] }), [], ['bookings'])
   const [draft, setDraft] = useState<Draft | null>(null)
   const toast = useToast()
 

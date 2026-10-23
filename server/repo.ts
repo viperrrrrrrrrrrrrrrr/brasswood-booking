@@ -2,6 +2,8 @@
 import type { Booking, BookingStatus, BusinessSettings, Client, DateStr, Service, StaffMember, TimeOff, WeeklyHours } from '../src/lib/types'
 import type { AvailabilityContext } from '../src/lib/availability'
 import { notFound } from './http'
+import { shopNow } from '../src/lib/shopTime'
+import { serverNow } from './clock'
 
 export interface ServiceRow { id: string; name: string; description: string; category: string; duration_min: number; price_cents: number; active: number }
 export interface StaffRow { id: string; name: string; role: string; bio: string; color: string; active: number }
@@ -86,21 +88,11 @@ export async function loadBlocking(db: D1Database, from: DateStr, to: DateStr): 
   }))
 }
 
-/** Current date and minute-of-day in the shop's timezone (Workers run in UTC). */
-export function shopNow(timeZone = 'America/New_York', at = new Date()): { date: DateStr; minutes: number } {
-  let parts: Intl.DateTimeFormatPart[]
-  try {
-    parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(at)
-  } catch {
-    parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(at)
-  }
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '00'
-  return { date: `${get('year')}-${get('month')}-${get('day')}`, minutes: (Number(get('hour')) % 24) * 60 + Number(get('minute')) }
-}
+export { shopNow } from '../src/lib/shopTime'
 
 export async function availabilityCtx(db: D1Database, from: DateStr, to: DateStr, catalog?: Catalog): Promise<AvailabilityContext> {
   const cat = catalog ?? (await loadCatalog(db))
-  return { ...cat, bookings: await loadBlocking(db, from, to), now: shopNow(cat.settings.timezone) }
+  return { ...cat, bookings: await loadBlocking(db, from, to), now: shopNow(cat.settings.timezone, serverNow()) }
 }
 
 export async function getBookingRow(db: D1Database, id: string): Promise<BookingRow> {

@@ -3,10 +3,12 @@ import type { BookingStatus, DayHours, WeeklyHours } from '../../src/lib/types'
 import { Router, noContent, type RouteCtx } from '../router'
 import { badRequest, conflict, json, notFound, readJson } from '../http'
 import {
-  BOOKING_COLS, getBookingRow, loadCatalog, makeId, mapBooking, mapClient, mapTimeOff, nowIso, shopNow, toCents,
+  BOOKING_COLS, fromCents, getBookingRow, loadCatalog, makeId, mapBooking, mapClient, mapTimeOff, nowIso, shopNow, toCents,
   type BookingRow, type ClientRow, type TimeOffRow,
 } from '../repo'
 import { createBooking, rescheduleBooking, setBookingStatus } from '../bookings'
+import { serverNow } from '../clock'
+import { batchVersioned, readVersions, runVersioned } from '../versions'
 import { EMAIL_RE, bool, date, id as vId, idList, int, isDate, normEmail, num, obj, phoneDigits, str } from '../validate'
 
 type Obj = Record<string, unknown>
@@ -15,7 +17,7 @@ const HEX = /^#[0-9a-fA-F]{6}$/
 
 async function shopToday(db: D1Database) {
   const s = await db.prepare('SELECT timezone FROM settings WHERE id = 1').first<{ timezone: string }>()
-  return shopNow(s?.timezone).date
+  return shopNow(s?.timezone, serverNow()).date
 }
 
 // ---------- services ----------
@@ -105,13 +107,13 @@ async function removeWithHistory(db: D1Database, table: 'services' | 'staff', co
     .first<{ upcoming: number | null; total: number }>()
   if ((counts?.upcoming ?? 0) > 0) throw conflict(`There are ${counts!.upcoming} upcoming booking(s). Deactivate instead, or reschedule/cancel them first.`)
   if ((counts?.total ?? 0) > 0) {
-    await db.batch([
+    await batchVersioned(db, [
       db.prepare(`UPDATE ${table} SET deleted_at = ?, active = 0 WHERE id = ?`).bind(nowIso(), id),
       db.prepare(`DELETE FROM staff_services WHERE ${column} = ?`).bind(id),
       ...(table === 'staff' ? [db.prepare('DELETE FROM time_off WHERE staff_id = ?').bind(id)] : []),
-    ])
+    ], 'catalog')
   } else {
-    await db.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(id).run()
+    await runVersioned(db, db.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(id), 'catalog')
   }
 }
 
@@ -131,21 +133,104 @@ async function listBookings(c: RouteCtx) {
     where.push(`status IN (${list.map(() => '?').join(',')})`)
     args.push(...list)
   }
-  const sql = `SELECT ${BOOKING_COLS} FROM bookings ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY date, start_min`
-  const { results } = await c.env.DB.prepare(sql).bind(...args).all<BookingRow>()
-  return results.map(mapBooking)
+  const withClient = p.get('withClient') === '1'
+  const limit = p.get('limit') ? Math.min(Math.max(Number(p.get('limit')) || 0, 1), 5000) : 0
+  const cols = withClient ? `${BOOKING_COLS.split(', ').map((col) => 'b.' + col).join(', ')}, c.name AS client_name, c.phone AS client_phone` : BOOKING_COLS
+  const sql = `SELECT ${cols} FROM bookings ${withClient ? 'b LEFT JOIN clients c ON c.id = b.client_id' : ''}
+    ${where.length ? 'WHERE ' + where.map((w) => (withClient ? 'b.' + w : w)).join(' AND ') : ''} ORDER BY ${withClient ? 'b.date, b.start_min' : 'date, start_min'}${limit ? ' LIMIT ' + limit : ''}`
+  const { results } = await c.env.DB.prepare(sql).bind(...args).all<BookingRow & { client_name?: string | null; client_phone?: string | null }>()
+  return results.map((r) => (withClient ? { ...mapBooking(r), clientName: r.client_name ?? '', clientPhone: r.client_phone ?? '' } : mapBooking(r)))
+}
+
+// ---------- clients (search + paginated summary) ----------
+const CLIENT_COLS = 'id, name, phone, email, notes, created_at'
+const likeEscape = (s: string) => s.replace(/[\\%_]/g, (ch) => '\\' + ch)
+
+/** WHERE fragment for the client search box: name/email contains, or phone digits contain (3+ digits). */
+function clientFilter(qRaw: string | null, alias = '') {
+  const qs = (qRaw ?? '').trim().toLowerCase().slice(0, 100)
+  if (!qs) return { sql: '', args: [] as unknown[] }
+  const digits = qs.replace(/\D/g, '')
+  const like = `%${likeEscape(qs)}%`
+  const a = alias ? alias + '.' : ''
+  return {
+    sql: `(${a}name LIKE ? ESCAPE '\\' OR ${a}email LIKE ? ESCAPE '\\'${digits.length >= 3 ? ` OR ${a}phone_digits LIKE ?` : ''})`,
+    args: [like, like, ...(digits.length >= 3 ? [`%${digits}%`] : [])],
+  }
+}
+
+interface AggRow { client_id: string; visits: number; spent_cents: number; no_shows: number; last_date: string | null; next_key: string | null; total: number }
+const AGG_COLS = `client_id,
+  SUM(status = 'completed') AS visits,
+  SUM(CASE WHEN status = 'completed' THEN price_cents ELSE 0 END) AS spent_cents,
+  SUM(status = 'no-show') AS no_shows,
+  MAX(CASE WHEN status = 'completed' THEN date END) AS last_date,
+  MIN(CASE WHEN status = 'confirmed' AND date >= ? THEN date || printf('%05d', start_min) END) AS next_key,
+  COUNT(*) AS total`
+
+function summaryRow(c: ClientRow, a?: Partial<AggRow> | null) {
+  return {
+    client: mapClient(c),
+    visits: a?.visits ?? 0,
+    spent: fromCents(a?.spent_cents ?? 0),
+    noShows: a?.no_shows ?? 0,
+    ...(a?.last_date ? { last: a.last_date } : {}),
+    ...(a?.next_key ? { next: { date: a.next_key.slice(0, 10), start: Number(a.next_key.slice(10)) } } : {}),
+    total: a?.total ?? 0,
+  }
+}
+
+/**
+ * GET /clients/summary?q=&sort=name|spent|last&limit=50&offset=0 → { total, rows }.
+ * A–Z walks the clients_name index and aggregates only the page's clients (bookings_client_date index);
+ * spend/recent need the aggregate over all bookings once per refresh (only refetched when data changed).
+ */
+async function clientSummary(c: RouteCtx) {
+  const p = c.url.searchParams
+  const db = c.env.DB
+  const sort = (['name', 'spent', 'last'] as const).find((s) => s === p.get('sort')) ?? 'last'
+  const limit = Math.min(Math.max(Number(p.get('limit') ?? 50) || 50, 1), 200)
+  const offset = Math.max(Number(p.get('offset') ?? 0) || 0, 0)
+  const today = await shopToday(db)
+  const f = clientFilter(p.get('q'))
+  const where = f.sql ? `WHERE ${f.sql}` : ''
+  const countStmt = db.prepare(`SELECT count(*) AS n FROM clients ${where}`).bind(...f.args)
+  if (sort === 'name') {
+    const [count, page] = await db.batch<{ n: number } | ClientRow>([
+      countStmt,
+      db.prepare(`SELECT ${CLIENT_COLS} FROM clients ${where} ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?`).bind(...f.args, limit, offset),
+    ])
+    const rows = page.results as ClientRow[]
+    const aggs = rows.length
+      ? (await db.prepare(`SELECT ${AGG_COLS} FROM bookings WHERE client_id IN (${rows.map(() => '?').join(',')}) GROUP BY client_id`).bind(today, ...rows.map((r) => r.id)).all<AggRow>()).results
+      : []
+    const byId = new Map(aggs.map((a) => [a.client_id, a]))
+    return { total: (count.results[0] as { n: number }).n, rows: rows.map((r) => summaryRow(r, byId.get(r.id))) }
+  }
+  const order = sort === 'spent' ? 'COALESCE(a.spent_cents, 0) DESC, c.name COLLATE NOCASE' : "COALESCE(substr(a.next_key, 1, 10), a.last_date, '') DESC, c.name COLLATE NOCASE"
+  const fa = clientFilter(p.get('q'), 'c')
+  const [count, page] = await db.batch<{ n: number } | (ClientRow & AggRow)>([
+    countStmt,
+    db.prepare(`WITH a AS (SELECT ${AGG_COLS} FROM bookings GROUP BY client_id)
+      SELECT c.id, c.name, c.phone, c.email, c.notes, c.created_at, a.visits, a.spent_cents, a.no_shows, a.last_date, a.next_key, a.total
+      FROM clients c LEFT JOIN a ON a.client_id = c.id ${fa.sql ? 'WHERE ' + fa.sql : ''} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(today, ...fa.args, limit, offset),
+  ])
+  return { total: (count.results[0] as { n: number }).n, rows: (page.results as (ClientRow & AggRow)[]).map((r) => summaryRow(r, r)) }
 }
 
 export const adminRouter = new Router()
+  /** Cheap change check for polling: one primary-key row read. The UI refetches only the scopes that moved. */
+  .get('/changes', async ({ env }) => json(await readVersions(env.DB)))
+
   // services
   .get('/services', async ({ env }) => json((await loadCatalog(env.DB)).services))
   .post('/services', async ({ env, req }) => {
     const f = serviceFields(await readJson(req), false)
     const id = makeId('svc')
-    await env.DB.prepare(
+    await runVersioned(env.DB, env.DB.prepare(
       `INSERT INTO services (id, name, description, category, duration_min, price_cents, active, sort_order)
        VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM services))`,
-    ).bind(id, f.name, f.description ?? '', f.category ?? '', f.durationMin, toCents(f.priceUsd!), f.active === false ? 0 : 1).run()
+    ).bind(id, f.name, f.description ?? '', f.category ?? '', f.durationMin, toCents(f.priceUsd!), f.active === false ? 0 : 1), 'catalog')
     return json(await getService(env.DB, id), 201)
   })
   .put('/services/:id', async ({ env, req, params }) => {
@@ -155,7 +240,7 @@ export const adminRouter = new Router()
     const set = (col: string, v: unknown) => { if (v !== undefined) { sets.push(`${col} = ?`); args.push(v) } }
     set('name', f.name); set('description', f.description); set('category', f.category); set('duration_min', f.durationMin)
     set('price_cents', f.priceUsd === undefined ? undefined : toCents(f.priceUsd)); set('active', f.active === undefined ? undefined : f.active ? 1 : 0)
-    if (sets.length) await env.DB.prepare(`UPDATE services SET ${sets.join(', ')} WHERE id = ?`).bind(...args, params.id).run()
+    if (sets.length) await runVersioned(env.DB, env.DB.prepare(`UPDATE services SET ${sets.join(', ')} WHERE id = ?`).bind(...args, params.id), 'catalog')
     return json(await getService(env.DB, params.id))
   })
   .delete('/services/:id', async ({ env, params }) => { await removeWithHistory(env.DB, 'services', 'service_id', params.id); return noContent() })
@@ -166,12 +251,12 @@ export const adminRouter = new Router()
     const f = staffFields(await readJson(req), false)
     const id = makeId('stf')
     const cat = await loadCatalog(env.DB)
-    await env.DB.batch([
+    await batchVersioned(env.DB, [
       env.DB.prepare(
         `INSERT INTO staff (id, name, role, bio, color, active, sort_order) VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM staff))`,
       ).bind(id, f.name, f.role ?? '', f.bio ?? '', f.color ?? '#b7791f', f.active === false ? 0 : 1),
       ...staffChildStatements(env.DB, id, f, new Set(cat.services.map((s) => s.id))),
-    ])
+    ], 'catalog')
     return json(await getStaff(env.DB, id), 201)
   })
   .put('/staff/:id', async ({ env, req, params }) => {
@@ -185,7 +270,7 @@ export const adminRouter = new Router()
       ...(sets.length ? [env.DB.prepare(`UPDATE staff SET ${sets.join(', ')} WHERE id = ?`).bind(...args, params.id)] : []),
       ...staffChildStatements(env.DB, params.id, f, new Set(cat.services.map((s) => s.id))),
     ]
-    if (stmts.length) await env.DB.batch(stmts) // atomic: hours/services are replaced all-or-nothing
+    if (stmts.length) await batchVersioned(env.DB, stmts, 'catalog') // atomic: hours/services are replaced all-or-nothing
     return json(await getStaff(env.DB, params.id))
   })
   .delete('/staff/:id', async ({ env, params }) => { await removeWithHistory(env.DB, 'staff', 'staff_id', params.id); return noContent() })
@@ -202,7 +287,7 @@ export const adminRouter = new Router()
     const staffId = b.staffId === null || b.staffId === undefined || b.staffId === '' ? null : vId(b.staffId, 'staffId')
     if (staffId && !(await env.DB.prepare('SELECT 1 FROM staff WHERE id = ? AND deleted_at IS NULL').bind(staffId).first())) throw notFound('Specialist not found')
     const id = makeId('off')
-    await env.DB.prepare('INSERT INTO time_off (id, staff_id, date, note) VALUES (?, ?, ?, ?)').bind(id, staffId, date(b, 'date'), str(b, 'note', { max: 200 }) ?? '').run()
+    await runVersioned(env.DB, env.DB.prepare('INSERT INTO time_off (id, staff_id, date, note) VALUES (?, ?, ?, ?)').bind(id, staffId, date(b, 'date'), str(b, 'note', { max: 200 }) ?? ''), 'catalog')
     return json(mapTimeOff((await env.DB.prepare('SELECT * FROM time_off WHERE id = ?').bind(id).first<TimeOffRow>())!), 201)
   })
   .put('/time-off/:id', async ({ env, req, params }) => {
@@ -210,18 +295,25 @@ export const adminRouter = new Router()
     const cur = await env.DB.prepare('SELECT * FROM time_off WHERE id = ?').bind(params.id).first<TimeOffRow>()
     if (!cur) throw notFound('Day off not found')
     const staffId = b.staffId === undefined ? cur.staff_id : b.staffId === null || b.staffId === '' ? null : vId(b.staffId, 'staffId')
-    await env.DB.prepare('UPDATE time_off SET staff_id = ?, date = ?, note = ? WHERE id = ?')
-      .bind(staffId, date(b, 'date', false) ?? cur.date, str(b, 'note', { max: 200 }) ?? cur.note, params.id).run()
+    await runVersioned(env.DB, env.DB.prepare('UPDATE time_off SET staff_id = ?, date = ?, note = ? WHERE id = ?')
+      .bind(staffId, date(b, 'date', false) ?? cur.date, str(b, 'note', { max: 200 }) ?? cur.note, params.id), 'catalog')
     return json(mapTimeOff((await env.DB.prepare('SELECT * FROM time_off WHERE id = ?').bind(params.id).first<TimeOffRow>())!))
   })
   .delete('/time-off/:id', async ({ env, params }) => {
-    const r = await env.DB.prepare('DELETE FROM time_off WHERE id = ?').bind(params.id).run()
+    const r = await runVersioned(env.DB, env.DB.prepare('DELETE FROM time_off WHERE id = ?').bind(params.id), 'catalog')
     if (!r.meta.changes) throw notFound('Day off not found')
     return noContent()
   })
 
   // clients
-  .get('/clients', async ({ env }) => json(((await env.DB.prepare('SELECT id, name, phone, email, notes, created_at FROM clients ORDER BY name COLLATE NOCASE').all<ClientRow>()).results).map(mapClient)))
+  /** ?q= searches name/email/phone, ?limit= caps the result (autocomplete). No params = everyone (A–Z). */
+  .get('/clients', async ({ env, url }) => {
+    const f = clientFilter(url.searchParams.get('q'))
+    const limit = url.searchParams.get('limit') ? Math.min(Math.max(Number(url.searchParams.get('limit')) || 0, 1), 500) : 0
+    const sql = `SELECT ${CLIENT_COLS} FROM clients ${f.sql ? 'WHERE ' + f.sql : ''} ORDER BY name COLLATE NOCASE${limit ? ' LIMIT ' + limit : ''}`
+    return json((await env.DB.prepare(sql).bind(...f.args).all<ClientRow>()).results.map(mapClient))
+  })
+  .get('/clients/summary', async (c) => json(await clientSummary(c)))
   .get('/clients/:id', async ({ env, params }) => {
     const r = await env.DB.prepare('SELECT id, name, phone, email, notes, created_at FROM clients WHERE id = ?').bind(params.id).first<ClientRow>()
     if (!r) throw notFound('Client not found')
@@ -231,7 +323,7 @@ export const adminRouter = new Router()
   .delete('/clients/:id', async ({ env, params }) => {
     const n = await env.DB.prepare('SELECT count(*) AS n FROM bookings WHERE client_id = ?').bind(params.id).first<{ n: number }>()
     if ((n?.n ?? 0) > 0) throw conflict('Client still has bookings — delete those first.')
-    const r = await env.DB.prepare('DELETE FROM clients WHERE id = ?').bind(params.id).run()
+    const r = await runVersioned(env.DB, env.DB.prepare('DELETE FROM clients WHERE id = ?').bind(params.id), 'clients')
     if (!r.meta.changes) throw notFound('Client not found')
     return noContent()
   })
@@ -245,8 +337,8 @@ export const adminRouter = new Router()
     if (!name) throw badRequest('name is required')
     if (email && !EMAIL_RE.test(email)) throw badRequest('Please enter a valid email')
     try {
-      await env.DB.prepare('UPDATE clients SET name = ?, phone = ?, phone_digits = ?, email = ?, notes = ?, updated_at = ? WHERE id = ?')
-        .bind(name, phone, phoneDigits(phone), email, str(b, 'notes', { max: 5000 }) ?? cur.notes, nowIso(), params.id).run()
+      await runVersioned(env.DB, env.DB.prepare('UPDATE clients SET name = ?, phone = ?, phone_digits = ?, email = ?, notes = ?, updated_at = ? WHERE id = ?')
+        .bind(name, phone, phoneDigits(phone), email, str(b, 'notes', { max: 5000 }) ?? cur.notes, nowIso(), params.id), 'clients')
     } catch (e) {
       if (e instanceof Error && e.message.includes('UNIQUE constraint failed')) throw conflict('Another client already uses this email.')
       throw e
@@ -284,7 +376,7 @@ export const adminRouter = new Router()
     }))
   })
   .delete('/bookings/:id', async ({ env, params }) => {
-    const r = await env.DB.prepare('DELETE FROM bookings WHERE id = ?').bind(params.id).run()
+    const r = await runVersioned(env.DB, env.DB.prepare('DELETE FROM bookings WHERE id = ?').bind(params.id), 'bookings')
     if (!r.meta.changes) throw notFound('Booking not found')
     return noContent()
   })
@@ -302,7 +394,7 @@ export const adminRouter = new Router()
     ]
     const sets = map.filter(([, v]) => v !== undefined)
     if (sets.length) {
-      await env.DB.prepare(`UPDATE settings SET ${sets.map(([k]) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = 1`).bind(...sets.map(([, v]) => v), nowIso()).run()
+      await runVersioned(env.DB, env.DB.prepare(`UPDATE settings SET ${sets.map(([k]) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = 1`).bind(...sets.map(([, v]) => v), nowIso()), 'catalog')
     }
     return json((await loadCatalog(env.DB)).settings)
   })

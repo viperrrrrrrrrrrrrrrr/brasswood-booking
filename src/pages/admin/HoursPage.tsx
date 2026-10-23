@@ -8,7 +8,7 @@ import { Avatar, Button, Card, EmptyState, Field, Input, Select, Spinner, cn, us
 import { PageHeader } from './AdminLayout'
 
 export default function HoursPage() {
-  const staff = useQuery(() => api.staff.list(), [])
+  const staff = useQuery(() => api.staff.list(), [], ['catalog'])
   const [selected, setSelected] = useState<string | null>(null)
   const member = staff.data?.find((s) => s.id === (selected ?? staff.data?.[0]?.id))
 
@@ -98,9 +98,9 @@ function WeekEditor({ staffId, hours: initial }: { staffId: string; hours: Weekl
 
 function TimeOffCard({ staff }: { staff: { id: string; name: string; color: string }[] }) {
   const today = todayStr()
-  const timeOff = useQuery(() => api.timeOff.list(), [])
+  const timeOff = useQuery(() => api.timeOff.list(), [], ['catalog'])
   const [form, setForm] = useState({ date: addDays(today, 1), staffId: '', note: '' })
-  const affected = useQuery(() => api.bookings.list({ from: form.date, to: form.date, status: ['confirmed'], staffId: form.staffId || undefined }), [form.date, form.staffId])
+  const affected = useQuery(() => api.bookings.list({ from: form.date, to: form.date, status: ['confirmed'], staffId: form.staffId || undefined }), [form.date, form.staffId], ['bookings'])
   const toast = useToast()
   const add = async () => {
     if (!form.date) return

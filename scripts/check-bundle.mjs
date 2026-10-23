@@ -44,6 +44,11 @@ for (const n of needles) {
 const devVars = files.filter((f) => /(^|[\\/])\.dev\.vars/.test(f) || /[\\/]\.env/.test(f))
 console.log(`${devVars.length ? 'FAIL' : 'PASS'}  no .dev.vars / .env files in the upload`)
 bad += devVars.length ? 1 : 0
+// The e2e-only test clock must never be configured for a deployed environment.
+const toml = readFileSync(join(ROOT, 'wrangler.toml'), 'utf8').split(/\r?\n/).filter((l) => !l.trim().startsWith('#')).join('\n')
+const clock = /TEST_CLOCK/.test(toml)
+console.log(`${clock ? 'FAIL' : 'PASS'}  wrangler.toml does not set TEST_CLOCK`)
+bad += clock ? 1 : 0
 if (!password) console.log('WARN  no ADMIN_PASSWORD found (.dev.vars / env) — password check skipped')
 console.log(`\nScanned ${files.length} files (dist/ + functions bundle in .wrangler/check-bundle). ${bad ? 'FAILED' : 'OK'}`)
 process.exit(bad ? 1 : 0)

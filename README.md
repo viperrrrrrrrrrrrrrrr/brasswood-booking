@@ -68,6 +68,7 @@ functions/api/               Cloudflare Pages Functions (file-based routing)
 server/                      shared server code: router, validation, D1 repository, bookings, auth
 migrations/0001_init.sql     D1 schema (services, staff, hours, time off, clients, bookings, settings,
                              admin_sessions, login_attempts)
+migrations/0002_data_versions.sql  1-row change counters (catalog / bookings / clients) + indexes for search & ranges
 seed/seed.sql                base data: settings, services, staff, hours — no clients, no bookings
                              (regenerate with `node scripts/gen-seed.mjs --base`)
 wrangler.toml                Pages project + D1 binding `DB` (database_id is a PLACEHOLDER)
@@ -136,7 +137,24 @@ npm run e2e -- --mode=api              # UI smoke test against :8788
 npm run e2e:history -- --mode=api      # Back/Forward/reload checks against :8788
 npm run build:demo && npm run preview:demo   # static demo on :4173, then:
 npm run e2e                            # and npm run e2e:history
+npm run test:unit                      # shop-time / DST unit tests, run under 6 process time zones
+npm run build && npm run e2e:tz        # own wrangler on :8796 (TEST_CLOCK=1, throw-away D1): UI in UTC, Europe/Prague,
+                                       # Asia/Tokyo, America/Los_Angeles with a fixed clock + admin polling checks
 ```
+
+**Time zone.** Everything time-related — slots, "today", past/upcoming, whether a booking can still be cancelled
+online — uses the shop timezone from Settings (default America/New_York) on the server, in the browser and in the
+demo, via `src/lib/shopTime.ts`. The visitor's browser timezone does not matter; pages show "shop time (New York)"
+when it differs. The server also returns `canCancel` for a booking. `.ics` files use UTC timestamps.
+
+**Admin refresh (D1 reads).** The admin checks `GET /api/admin/changes` (one row: `catalog`/`bookings`/`clients`
+counters, bumped in the same D1 batch as every write) and refetches only the lists whose scope changed.
+Every 20 s while active, slowing to 60 s when idle (no input for ~5 min), paused while the tab is hidden, an
+immediate check on focus/visibility; tabs share results via BroadcastChannel. Public pages check `/api/changes`
+the same way. The Clients page is paginated server-side (`/api/admin/clients/summary`, 50 rows per page).
+
+`TEST_CLOCK=1` (only passed as `--binding` by `e2e:tz`) lets the `x-test-now` header move the server clock.
+It must never be set in `wrangler.toml` or in Cloudflare; `check:bundle` and `verify:remote` fail if it is.
 
 ```bash
 npm run check:bundle                   # build + functions bundle; fails if the .dev.vars password / demo login is inside
@@ -161,12 +179,12 @@ environment: Pages project `brasswood-test` + D1 `brasswood-test`. In short:
 
 1. `npx wrangler login` (or `$env:CLOUDFLARE_API_TOKEN` with Account → D1 Edit + Account → Cloudflare Pages Edit, and `$env:CLOUDFLARE_ACCOUNT_ID`).
 2. `npx wrangler d1 create brasswood-test` → `npm run remote:set-db-id -- <database_id>` → `npm run remote:check`.
-3. `npx wrangler d1 migrations apply brasswood-test --remote --env production`, then
+3. `npx wrangler d1 migrations apply brasswood-test --remote --env production` (applies **0001 and 0002**), then
    `npx wrangler d1 execute brasswood-test --remote --env production --file seed/seed.sql` (no clients, no bookings).
 4. `npx wrangler pages project create brasswood-test --production-branch main`.
 5. `npx wrangler pages secret put ADMIN_USERNAME|ADMIN_PASSWORD --project-name brasswood-test` (use `ADMIN_PASSWORD`, not the PBKDF2 hash, on the Free plan — 10 ms CPU limit).
 6. `npm run deploy:test` (= `remote:check` + `check:bundle` + `wrangler pages deploy dist --project-name brasswood-test --branch main`).
-7. `/api/health` → `{"ok":true,"db":"ok","seeded":true}`, then `npm run verify:remote` with `BASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`.
+7. `/api/health` → `{"ok":true,"db":"ok","seeded":true,"schema":2}` (no `testClock`), then `npm run verify:remote` with `BASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`.
 
 `wrangler.toml` layout: the top level is **local dev only** (D1 `brasswood`, placeholder id that is never deployed);
 `[env.production]` / `[env.preview]` point at D1 `brasswood-test` and contain a placeholder id that
@@ -188,17 +206,13 @@ loops and ignores it — that is harmless: Pages serves `index.html` for unknown
 ## Before real customers (not done / not verified yet)
 
 - Not deployed; **remote D1 has not been tested**. Follow docs/REMOTE_TEST.md (`npm run verify:remote` + the manual browser check).
-- Admin polling refetches full lists every 20 s (dashboard: 41 days of bookings + all clients; Clients page: ALL bookings + clients).
-  With months of data one open admin tab can approach the D1 Free limit of 5M rows read/day (then D1 errors until 00:00 UTC,
-  also for public booking). Before real use: add a cheap "changed since" check (1-row read) and refetch only on change.
+- D1 Free limit is 5M rows read/day (then D1 errors until 00:00 UTC, also for public booking). With the change counters
+  one admin tab open 8 h costs ~0.2M rows/day at 1000–2500 clients (estimate; was 3.4–5.3M). The Clients page
+  sorted by Recent/Top spend re-aggregates all bookings on each change (~0.6M/day at 1000 clients, ~1.4M at 2500);
+  A–Z is cheap. Check the real numbers in the Cloudflare D1 metrics after the test launch.
 - One shared admin account (no per-staff users, no password reset, no 2FA). Rate limiting is per IP in D1.
 - No email/SMS confirmations or reminders. Anyone with a booking code can see (date, time, service, notes) and
   cancel that booking; codes are random (6 chars from 32 symbols) but there is no rate limit on lookups yet.
 - No bot/spam protection on public booking (consider Cloudflare Turnstile) and no consent/privacy text.
-- The UI shows the browser's local time; the server uses the shop timezone from Settings (default
-  America/New_York). Visitors in other time zones may be confused.
-  **Confirmed bug (2026-10-23):** a same-day booking made in the late afternoon (shop time) is treated as "past" by a
-  browser in UTC, so "Cancel booking" is hidden (`ManagePage` uses browser `nowMinutes()`). `npm run e2e -- --mode=api`
-  fails on this after ~17:00 UTC; run it with `TZ=America/New_York` until the UI uses the shop timezone.
-- Other admins' changes appear after focus / within ~20 s (polling), not instantly.
+- Other admins' changes appear after focus / within ~20–60 s (polling), not instantly.
 - No backups configured (D1 Time Travel exists on Cloudflare — check your plan) and no monitoring.

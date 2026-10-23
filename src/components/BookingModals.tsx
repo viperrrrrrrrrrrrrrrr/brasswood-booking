@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CalendarClock, Trash2, Mail, Phone, Scissors, User, CalendarDays, StickyNote } from 'lucide-react'
 import { api } from '../data'
-import { useQuery } from '../data/hooks'
+import { useDebounced, useQuery } from '../data/hooks'
 import type { BookingStatus, ID, Service, StaffMember } from '../lib/types'
 import { fmtDateLong, fmtDuration, fmtTime, todayStr, usd } from '../lib/date'
 import { Avatar, Button, Field, Input, Modal, Select, STATUS_STYLE, Spinner, Textarea, cn, useToast } from './ui'
@@ -11,9 +11,9 @@ const STATUSES: BookingStatus[] = ['confirmed', 'completed', 'no-show', 'cancell
 export function BookingDetailsModal({ bookingId, onClose, services, staff }: { bookingId: ID | null; onClose: () => void; services: Service[]; staff: StaffMember[] }) {
   const toast = useToast()
   const [rescheduling, setRescheduling] = useState(false)
-  const booking = useQuery(() => (bookingId ? api.bookings.get(bookingId) : Promise.resolve(undefined)), [bookingId])
+  const booking = useQuery(() => (bookingId ? api.bookings.get(bookingId) : Promise.resolve(undefined)), [bookingId], ['bookings'])
   const b = booking.data
-  const client = useQuery(() => (b ? api.clients.get(b.clientId) : Promise.resolve(undefined)), [b?.clientId])
+  const client = useQuery(() => (b ? api.clients.get(b.clientId) : Promise.resolve(undefined)), [b?.clientId], ['clients'])
   useEffect(() => setRescheduling(false), [bookingId])
   if (!bookingId) return null
   const service = services.find((s) => s.id === b?.serviceId)
@@ -98,7 +98,9 @@ export function BookingFormModal({ open, mode, bookingId, initial, services, sta
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState('')
-  const clients = useQuery(() => api.clients.list(), [])
+  // Server-side search (limit 5) instead of loading every client for the autocomplete.
+  const term = useDebounced(query.trim(), 250)
+  const clients = useQuery(() => (term.length >= 2 ? api.clients.list({ q: term, limit: 5 }) : Promise.resolve([])), [term], ['clients'])
   const eligible = staff.filter((s) => s.active && s.serviceIds.includes(serviceId))
 
   useEffect(() => {
@@ -108,15 +110,12 @@ export function BookingFormModal({ open, mode, bookingId, initial, services, sta
   const slots = useQuery(
     () => (serviceId && staffId && date ? api.availability.getSlots({ serviceId, staffId, date, excludeBookingId: bookingId, ignoreRules: true }) : Promise.resolve([])),
     [serviceId, staffId, date, bookingId],
+    ['catalog', 'bookings'],
   )
   const slotOptions = slots.data ?? []
   const startValid = start !== '' && slotOptions.some((s) => s.start === start)
 
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (q.length < 2) return []
-    return (clients.data ?? []).filter((c) => c.name.toLowerCase().includes(q) || c.phone.includes(q) || c.email.includes(q)).slice(0, 5)
-  }, [query, clients.data])
+  const matches = useMemo(() => (query.trim().length < 2 ? [] : clients.data ?? []), [query, clients.data])
 
   const save = async () => {
     if (start === '' || !startValid) return toast('Pick an available time', 'error')
