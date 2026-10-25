@@ -9,15 +9,28 @@ a fast customer booking flow and a full admin panel. Two builds from the same co
 - **Static demo (`npm run build:demo`)** — the original zero-backend demo: data in each visitor's `localStorage`,
   demo login `admin` / `demo`.
 
-> Status: implemented and tested **locally** (wrangler + local D1). It has **not** been deployed or tested against a
-> remote Cloudflare D1 yet — see "Before real customers" below.
+> **Live demos**
+> - Redesign + D1 backend (this branch, `remote-test`): https://brasswood-test.pages.dev
+> - Classic static demo (branch `main`, data in `localStorage`): https://brasswood-booking.pages.dev
+>
+> Status: the API build runs as a separate **test** environment (`brasswood-test` Pages project + its own D1 database).
+> It is a portfolio demo, not a production system. See "Before real customers" below.
 
-> Brasswood Barber Co. is a fictional business. All names, phones and emails in the seed data are made up.
+> Brasswood Barber Co. is a fictional business. All names, phones, emails and prices in the seed data are made-up samples.
 
 **Admin login:** API build — `ADMIN_USERNAME` / `ADMIN_PASSWORD` server secrets (nothing is shown on the login page).
 Static demo build — `admin` / `demo` (shown on the login page).
 
-![Booking](shots/booking.png)
+![Booking page (dark redesign)](docs/screenshot-booking.jpg)
+![Admin dashboard](docs/screenshot-admin.jpg)
+
+## Branches
+
+| Branch | What it is |
+|---|---|
+| `remote-test` (default) | Latest version: premium dark redesign of the client site, D1 backend, shop-timezone handling, remote test tooling |
+| `d1-backend` | First Cloudflare D1 + Pages Functions backend (verified locally only) |
+| `main` | Original zero-backend demo: everything in `localStorage` (live at brasswood-booking.pages.dev) |
 
 ## Features
 
@@ -172,7 +185,7 @@ admin password from `.dev.vars`. Chrome is taken from `CHROME_PATH` (default `/u
 on Windows: `$env:CHROME_PATH="C:\Program Files\Google\Chrome\Application\chrome.exe"`.
 Screenshots go to `shots/` (`shots/api-*.png` for API mode).
 
-## Deploy to Cloudflare (do these yourself — nothing below has been run)
+## Deploy to Cloudflare Pages
 
 Step-by-step runbook (Russian, PowerShell): **[docs/REMOTE_TEST.md](docs/REMOTE_TEST.md)** — a separate TEST
 environment: Pages project `brasswood-test` + D1 `brasswood-test`. In short:
@@ -205,7 +218,7 @@ loops and ignores it — that is harmless: Pages serves `index.html` for unknown
 
 ## Before real customers (not done / not verified yet)
 
-- Not deployed; **remote D1 has not been tested**. Follow docs/REMOTE_TEST.md (`npm run verify:remote` + the manual browser check).
+- Only deployed as a **test** environment (brasswood-test). Before going live, run docs/REMOTE_TEST.md checks (`npm run verify:remote` + the manual browser check).
 - D1 Free limit is 5M rows read/day (then D1 errors until 00:00 UTC, also for public booking). With the change counters
   one admin tab open 8 h costs ~0.2M rows/day at 1000–2500 clients (estimate; was 3.4–5.3M). The Clients page
   sorted by Recent/Top spend re-aggregates all bookings on each change (~0.6M/day at 1000 clients, ~1.4M at 2500);
@@ -216,3 +229,7 @@ loops and ignores it — that is harmless: Pages serves `index.html` for unknown
 - No bot/spam protection on public booking (consider Cloudflare Turnstile) and no consent/privacy text.
 - Other admins' changes appear after focus / within ~20–60 s (polling), not instantly.
 - No backups configured (D1 Time Travel exists on Cloudflare — check your plan) and no monitoring.
+
+## License
+
+[MIT](LICENSE) © 2026 Ivan Litvin

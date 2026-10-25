@@ -27,3 +27,10 @@ dist-ssr
 .wrangler
 .dev.vars
 dist-demo
+
+# Local env overrides (the committed .env / .env.demo only select the Vite data mode, no secrets)
+.env.local
+.env.*.local
+test-results
+playwright-report
+*.zip
