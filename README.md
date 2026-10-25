@@ -6,6 +6,9 @@ data lives in `localStorage` behind a repository interface, so it can be swapped
 
 > Brasswood Barber Co. is a fictional business. All names, phones and emails in the seed data are made up.
 
+**Live demo:** https://brasswood-booking.pages.dev · The latest version (dark redesign + Cloudflare D1 backend) is on the
+[`remote-test`](../../tree/remote-test) branch, live at https://brasswood-test.pages.dev
+
 **Admin demo login:** `admin` / `demo` (shown on the login page).
 
 ![Booking](shots/booking.png)
@@ -95,3 +98,7 @@ npx wrangler pages deploy dist --project-name brasswood-booking
 - Admin auth is a demo gate (session storage), not real security.
 - No real email/SMS notifications — the confirmation screen notes that one would be emailed in the live product.
 - Times are shown in the visitor's local timezone.
+
+## License
+
+[MIT](LICENSE) © 2026 Ivan Litvin
