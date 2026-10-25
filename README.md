@@ -9,6 +9,8 @@ a fast customer booking flow and a full admin panel. Two builds from the same co
 - **Static demo (`npm run build:demo`)** — the original zero-backend demo: data in each visitor's `localStorage`,
   demo login `admin` / `demo`.
 
+> This is an intermediate branch. The latest version is on [`remote-test`](../../tree/remote-test) (live at https://brasswood-test.pages.dev).
+
 > Status: implemented and tested **locally** (wrangler + local D1). It has **not** been deployed or tested against a
 > remote Cloudflare D1 yet — see "Before real customers" below.
 
@@ -196,3 +198,7 @@ loops and ignores it — that is harmless: Pages serves `index.html` for unknown
   America/New_York). Visitors in other time zones may be confused.
 - Other admins' changes appear after focus / within ~20 s (polling), not instantly.
 - No backups configured (D1 Time Travel exists on Cloudflare — check your plan) and no monitoring.
+
+## License
+
+[MIT](LICENSE) © 2026 Ivan Litvin
