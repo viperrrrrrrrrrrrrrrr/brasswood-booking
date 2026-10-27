@@ -51,7 +51,7 @@ export default function LoginPage() {
           <div className="mt-4 flex items-start gap-3 rounded-xl bg-brand-50 p-3 text-sm ring-1 ring-brand-100">
             <KeyRound className="mt-0.5 size-4 shrink-0 text-brand-600" />
             <div className="flex-1">
-              <p className="font-medium text-brand-900">Demo credentials</p>
+              <p className="font-medium text-brand-900">Sign-in details</p>
               <p className="text-brand-800">Username <code className="rounded bg-white px-1 font-mono">{demo.username}</code> · Password <code className="rounded bg-white px-1 font-mono">{demo.password}</code></p>
             </div>
             <button type="button" onClick={fill} className="text-xs font-semibold text-brand-700 hover:underline">Fill in</button>

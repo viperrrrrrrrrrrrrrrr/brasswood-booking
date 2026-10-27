@@ -22,11 +22,11 @@ export default function AdminLayout() {
   const [resetting, setResetting] = useState(false)
 
   const reset = async () => {
-    if (!window.confirm('Reset all demo data? Your changes will be replaced with fresh sample data.')) return
+    if (!window.confirm('Reset all sample data? Your changes will be replaced with fresh sample data.')) return
     setResetting(true)
     await api.resetDemoData()
     setResetting(false)
-    toast('Demo data has been reset')
+    toast('Sample data has been reset')
   }
 
   const sidebar = (
@@ -44,7 +44,7 @@ export default function AdminLayout() {
         <a href="/" target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-stone-400 hover:bg-white/5 hover:text-stone-200"><ExternalLink className="size-[18px]" />Open booking page</a>
         {api.canResetDemoData && (
           <button onClick={reset} disabled={resetting} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-stone-400 hover:bg-white/5 hover:text-stone-200" data-testid="reset-demo">
-            <RotateCcw className={cn('size-[18px]', resetting && 'animate-spin')} />Reset demo data
+            <RotateCcw className={cn('size-[18px]', resetting && 'animate-spin')} />Reset sample data
           </button>
         )}
         <button onClick={async () => { await auth.logout().catch(() => undefined); nav('/admin/login', { replace: true }) }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-stone-400 hover:bg-white/5 hover:text-stone-200"><LogOut className="size-[18px]" />Sign out</button>

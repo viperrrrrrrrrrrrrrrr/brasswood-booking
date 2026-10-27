@@ -96,7 +96,7 @@ try {
   const distFiles = walk(join(ROOT, 'dist'))
   const distText = distFiles.map((f) => readFileSync(f, 'utf8')).join('\n')
   ok('Admin password from .dev.vars not in dist/', !distText.includes(CREDS.password), `${distFiles.length} files scanned`)
-  ok('No demo credentials / demo auth in api bundle', !/Demo credentials|DEMO_CREDENTIALS|brasswood-admin-session|brasswood-booking-demo/.test(distText))
+  ok('No demo credentials / demo auth in api bundle', !/Demo credentials|Sign-in details|DEMO_CREDENTIALS|brasswood-admin-session|brasswood-booking-demo/.test(distText))
   const html = await (await fetch(BASE + '/')).text()
   const served = [...html.matchAll(/\/assets\/[^"']+\.js/g)].map((m) => m[0])
   const servedText = (await Promise.all(served.map(async (p) => (await fetch(BASE + p)).text()))).join('\n')
@@ -184,7 +184,7 @@ try {
     user: document.querySelector('input[name="username"]').value, pass: document.querySelector('input[name="password"]').value, text: document.body.innerText,
   }))
   await B.screenshot({ path: join(SHOTS, 'api-admin-login.png') })
-  ok('Admin login page: empty password, no demo credentials, no "Fill in"', loginState.pass === '' && !/Demo credentials|Fill in|demo/i.test(loginState.text), `username field="${loginState.user}"`)
+  ok('Admin login page: empty password, no demo credentials, no "Fill in"', loginState.pass === '' && !/Demo credentials|Sign-in details|Fill in|demo/i.test(loginState.text), `username field="${loginState.user}"`)
   await B.fill('input[name="username"]', CREDS.username)
   await B.fill('input[name="password"]', 'definitely-wrong')
   await B.click('button[type="submit"]')
@@ -207,7 +207,7 @@ try {
   const M = await ctxM.newPage()
   await M.goto(BASE + '/admin/login'); await M.waitForSelector('input[name="password"]'); await M.waitForTimeout(400)
   await M.screenshot({ path: join(SHOTS, 'api-admin-login-mobile.png') })
-  ok('Mobile admin login (fresh context) has no credentials shown', !/Demo credentials|Fill in/i.test(await M.innerText('body')))
+  ok('Mobile admin login (fresh context) has no credentials shown', !/Demo credentials|Sign-in details|Fill in/i.test(await M.innerText('body')))
   await ctxM.close()
 
   // ---------- privacy of public endpoints ----------

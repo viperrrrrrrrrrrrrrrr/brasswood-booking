@@ -592,7 +592,7 @@ function DetailsStep({ details, errors, onChange }: { details: Details; errors: 
           <LuxTextarea name="notes" value={details.notes} onChange={set('notes')} placeholder="e.g. keep length on top, sensitive skin…" />
         </LuxField>
       </form>
-      {IS_DEMO && <p className="mt-5 text-xs text-faint">Demo only: details are stored in this browser’s local storage and never sent anywhere.</p>}
+      {IS_DEMO && <p className="mt-5 text-xs text-faint">Details are stored in this browser’s local storage and never sent anywhere.</p>}
     </div>
   )
 }
