@@ -32,7 +32,7 @@ const needles = [
   { name: 'DEMO_CREDENTIALS', test: (t) => t.includes('DEMO_CREDENTIALS') },
   { name: "'admin/demo'", test: (t) => t.includes('admin/demo') },
   { name: 'demo login object {username:"admin",password:"demo"}', test: (t) => /username\s*:\s*["']admin["']\s*,\s*password\s*:\s*["']demo["']/.test(t) },
-  { name: '"Demo credentials" hint', test: (t) => /Demo credentials|Sign-in details/i.test(t) },
+  { name: '"Demo credentials" hint', test: (t) => /Demo credentials/i.test(t) },
   { name: 'ADMIN_PASSWORD= assignment (a .dev.vars copy)', test: (t) => /ADMIN_PASSWORD\s*=\s*\S/.test(t) },
 ]
 let bad = 0

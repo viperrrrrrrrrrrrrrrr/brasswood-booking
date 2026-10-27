@@ -11,7 +11,7 @@ export function downloadIcs(opts: { uid: string; title: string; description: str
   const body = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//Brasswood Booking//EN',
+    'PRODID:-//Brasswood Booking Demo//EN',
     'BEGIN:VEVENT',
     `UID:${opts.uid}@brasswood.example`,
     `DTSTAMP:${now}`,
